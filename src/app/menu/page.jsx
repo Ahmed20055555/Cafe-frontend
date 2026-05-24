@@ -127,21 +127,13 @@ export default function MenuPage() {
   const fetchAllTableStatuses = async () => {
     setTableStatusLoading(true);
     try {
-      const results = await Promise.allSettled(
-        Array.from({ length: TOTAL_TABLES }, (_, i) =>
-          api.get(`/tables/status/${i + 1}`)
-        )
-      );
-      const statuses = {};
-      results.forEach((result, idx) => {
-        if (result.status === 'fulfilled' && result.value.data.success) {
-          const d = result.value.data.data;
-          statuses[idx + 1] = d.isBlocked ? 'blocked' : d.status;
-        } else {
-          statuses[idx + 1] = 'available';
-        }
-      });
-      setTableStatuses(statuses);
+      const res = await api.get('/tables/public/status');
+      if (res.data.success) {
+        const statuses = {};
+        for (let i = 1; i <= TOTAL_TABLES; i++) statuses[i] = 'available';
+        Object.assign(statuses, res.data.data);
+        setTableStatuses(statuses);
+      }
     } catch (e) {
       console.error('Failed to fetch table statuses:', e);
     } finally {
