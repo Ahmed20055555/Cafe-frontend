@@ -141,6 +141,49 @@ export default function MenuPage() {
     }
   };
 
+  // ─── Polling Fallback for Order Status ────────────────────────────────────
+  // This is crucial for environments like Vercel where WebSockets might fail
+  useEffect(() => {
+    if (!orderSuccess || !activeSession?.token) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await api.get(`/sessions/${activeSession.token}`);
+        if (res.data.success && res.data.data.status === 'active') {
+          const sessionData = res.data.data;
+          const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
+          
+          if (activeOrder) {
+            setOrderTracker(prev => {
+              const hasChanged = prev?.status !== activeOrder.status || prev?.readyAt !== activeOrder.estimatedReadyAt;
+              
+              if (hasChanged && activeOrder.status === 'preparing') {
+                toast(`⏱️ المطبخ بدأ تحضير طلبك - ${activeOrder.estimatedTime || 10} دقيقة`, { icon: '⏳', duration: 4000 });
+              } else if (hasChanged && activeOrder.status === 'ready') {
+                toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
+              }
+
+              if (hasChanged) {
+                return {
+                  status: activeOrder.status,
+                  estimatedMins: activeOrder.estimatedTime,
+                  readyAt: activeOrder.estimatedReadyAt,
+                  orderNumber: activeOrder.orderNumber,
+                };
+              }
+              return prev;
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Polling order status failed:', error);
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [orderSuccess, activeSession]);
+
+
   const handleTableSelect = async (num) => {
     try {
       const res = await api.get(`/tables/status/${num}`);
