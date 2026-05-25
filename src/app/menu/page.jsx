@@ -260,7 +260,15 @@ export default function MenuPage() {
 
     const socket = connectSocket();
     socketRef.current = socket;
-    socket.emit('join:session', sessionData._id);
+
+    // Join room when connected (handles reconnects)
+    const joinSession = () => socket.emit('join:session', sessionData._id);
+    socket.on('connect', joinSession);
+    if (socket.connected) joinSession();
+
+    // Remove old listeners to prevent duplicates
+    socket.off('order:preparing');
+    socket.off('order:ready');
 
     socket.on('order:preparing', (data) => {
       setOrderTracker({
