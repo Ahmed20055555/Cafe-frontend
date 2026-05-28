@@ -7,6 +7,7 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState({ todayRevenue: 0, todayOrders: 0, activeSessions: 0, conversionRate: 0 });
   const [recentOrders, setRecentOrders] = useState([]);
   const [popularItems, setPopularItems] = useState([]);
+  const [recentFeedback, setRecentFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -31,6 +32,12 @@ export default function AdminDashboard() {
         const ordersRes = await api.get('/orders?limit=5&sort=-createdAt');
         if (ordersRes.data.success) {
           setRecentOrders(ordersRes.data.data);
+        }
+
+        // Fetch Recent Feedback
+        const feedbackRes = await api.get('/extras/feedback');
+        if (feedbackRes.data.success) {
+          setRecentFeedback(feedbackRes.data.data.slice(0, 5));
         }
       } catch (error) {
         console.error("Error fetching dashboard data:", error);
@@ -169,6 +176,37 @@ export default function AdminDashboard() {
               ))
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Recent Feedback */}
+      <div className="mt-4 md:mt-6 bg-card border border-white/5 rounded-2xl p-4 md:p-6">
+        <h2 className="text-lg md:text-xl font-bold mb-4 md:mb-6">أحدث آراء العملاء</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {recentFeedback.length === 0 ? (
+            <div className="col-span-full text-center text-[#5e5e72] py-8 text-xs md:text-sm">لا توجد تقييمات حتى الآن</div>
+          ) : (
+            recentFeedback.map(fb => (
+              <div key={fb._id} className="bg-elevated p-4 rounded-xl flex flex-col gap-3 border border-white/5 shadow-md">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-bold text-sm md:text-base flex items-center gap-2">
+                      {fb.customerName || 'عميل غير معروف'}
+                      <span className="bg-primary/20 text-primary text-[10px] px-2 py-0.5 rounded-full font-bold">طاولة {fb.tableNumber || '-'}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-0.5" dir="ltr">
+                    {[1, 2, 3, 4, 5].map(star => (
+                      <span key={star} className={`text-sm ${star <= fb.rating ? 'text-yellow-400' : 'text-gray-600'}`}>★</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-xs md:text-sm text-[#9a9aad] italic bg-[#0a0a0f] p-3 rounded-lg border border-white/5">
+                  "{fb.comment || 'لم يترك تعليقاً'}"
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

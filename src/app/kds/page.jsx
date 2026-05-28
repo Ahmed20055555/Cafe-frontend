@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from 'react';
 import { FaCheck, FaClock, FaFire, FaExclamationTriangle, FaSync } from 'react-icons/fa';
+import toast from 'react-hot-toast';
 import { getActiveOrders, updateOrderStatus } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import api from '@/lib/api';
@@ -172,9 +173,19 @@ export default function KDSPage() {
             .filter(o => !['ready', 'served', 'completed'].includes(o.status))
       );
     });
+
+    socket.on('order:kitchenAlerted', (data) => {
+      toast(`🔔 تنبيه تأخير: الزبون على طاولة ${data.tableNumber || 'سفري'} بيسأل على الأوردر!`, { 
+        icon: '⚠️', duration: 8000, 
+        style: { background: '#ef4444', color: '#fff', fontWeight: 'bold' } 
+      });
+      try { new Audio('/notification.mp3').play(); } catch (_) {}
+    });
+
     return () => {
       socket.off('connect'); socket.off('disconnect');
       socket.off('order:new'); socket.off('order:statusUpdate');
+      socket.off('order:kitchenAlerted');
       disconnectSocket();
     };
   }, [fetchOrders]);

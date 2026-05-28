@@ -27,9 +27,9 @@ function LiveCountdown({ readyAt, onDone }) {
   const secs = remaining % 60;
   const done = remaining === 0;
   return (
-    <span className={`font-mono font-black text-2xl ${done ? 'text-green-400' : remaining < 60 ? 'text-red-400 animate-pulse' : 'text-primary'
-      }`}>
-      {done ? 'جاهز الآن!' : `${mins}:${String(secs).padStart(2, '0')}`}
+    <span dir="ltr" className={`inline-block font-black text-3xl tracking-widest ${done ? 'text-green-400' : remaining < 60 ? 'text-red-400 animate-pulse' : 'text-primary'
+      }`} style={{ fontFamily: 'monospace' }}>
+      {done ? '✅ جاهز!' : `${mins} : ${String(secs).padStart(2, '0')}`}
     </span>
   );
 }
@@ -49,6 +49,7 @@ export default function MenuPage() {
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [activeSession, setActiveSession] = useState(null);
   const [orderTracker, setOrderTracker] = useState(null);
+  const lastToastedStatus = useRef(null); // track which status we already toasted
   const [tableStatuses, setTableStatuses] = useState({}); // { 1: 'available', 2: 'occupied', ... }
   const [tableStatusLoading, setTableStatusLoading] = useState(false);
   const [selectedTableInfo, setSelectedTableInfo] = useState(null); // status info for chosen table
@@ -58,6 +59,18 @@ export default function MenuPage() {
   const [deliveryInfo, setDeliveryInfo] = useState({ name: '', phone: '', address: '' });
   const cartBtnRef = useRef(null);
   const socketRef = useRef(null);
+
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackMode, setFeedbackMode] = useState('review'); // 'review' | 'billing'
+  const [feedbackName, setFeedbackName] = useState("");
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [foodRating, setFoodRating] = useState(5);
+  const [serviceRating, setServiceRating] = useState(5);
+  const [ambienceRating, setAmbienceRating] = useState(5);
+  const [sessionStatus, setSessionStatus] = useState("active"); // active, billing, completed
+  const [kitchenAlertSent, setKitchenAlertSent] = useState(false);
+  const [kitchenAlertTimer, setKitchenAlertTimer] = useState(0);
 
   const TOTAL_TABLES = 10;
 
@@ -101,26 +114,13 @@ export default function MenuPage() {
       if (res.data.success && res.data.data.status === 'active') {
         const sessionData = res.data.data;
         const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
-        if (activeOrder) {
-          setResumableSession({ sessionData, activeOrder });
-          
-          // Auto-resume if coming from the landing page resume button
-          const params = new URLSearchParams(window.location.search);
-          if (params.get('resume') === 'true') {
-            const notes = activeOrder.customerNotes || '';
-            const isDelivery = notes.includes('ديليفري');
-            const isTakeaway = notes.includes('تيك أوي');
-            const resumedType = sessionData.tableNumber > 0 ? 'dine-in' : isDelivery ? 'delivery' : isTakeaway ? 'takeaway' : 'dine-in';
-            
-            setTableNumber(sessionData.tableNumber);
-            setupActiveSession(sessionData, activeOrder);
-            setOrderType(resumedType); 
-            setShowTableModal(false);
-          }
-        }
+        
+        // Only set resumableSession so the green banner appears, letting the user choose whether to resume or pick a table manually
+        setResumableSession({ sessionData, activeOrder: activeOrder || null });
       }
     } catch (e) {
       // Token invalid or session ended
+      localStorage.removeItem('latest_session_token');
     }
   };
 
@@ -141,47 +141,127 @@ export default function MenuPage() {
     }
   };
 
-  // ─── Polling Fallback for Order Status ────────────────────────────────────
-  // This is crucial for environments like Vercel where WebSockets might fail
+  // ─── Cooldown timer for kitchen alert ─────────────────────────────────────
   useEffect(() => {
-    if (!orderSuccess || !activeSession?.token) return;
+    if (kitchenAlertTimer <= 0) {
+      setKitchenAlertSent(false);
+      return;
+    }
+    const id = setInterval(() => {
+      setKitchenAlertTimer(t => t - 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [kitchenAlertTimer]);
+
+  // ─── Polling Fallback for Session/Order Status ────────────────────────────
+  useEffect(() => {
+    if (!activeSession?.token) return;
 
     const intervalId = setInterval(async () => {
       try {
         const res = await api.get(`/sessions/${activeSession.token}`);
-        if (res.data.success && res.data.data.status === 'active') {
+        if (res.data.success) {
           const sessionData = res.data.data;
-          const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
+          setSessionStatus(sessionData.status); // active, billing, completed
           
-          if (activeOrder) {
-            setOrderTracker(prev => {
-              const hasChanged = prev?.status !== activeOrder.status || prev?.readyAt !== activeOrder.estimatedReadyAt;
-              
-              if (hasChanged && activeOrder.status === 'preparing') {
-                toast(`⏱️ المطبخ بدأ تحضير طلبك - ${activeOrder.estimatedTime || 10} دقيقة`, { icon: '⏳', duration: 4000 });
-              } else if (hasChanged && activeOrder.status === 'ready') {
-                toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
-              }
+          if (sessionData.status === 'active') {
+            const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
+            
+            if (activeOrder) {
+              setOrderTracker(prev => {
+                let newStatus = activeOrder.status;
+                
+                // If local status is already 'ready' (due to countdown finishing) for the SAME order,
+                // do NOT downgrade it back to 'preparing' even if backend hasn't updated yet.
+                if (prev?.orderNumber === activeOrder.orderNumber && prev?.status === 'ready' && activeOrder.status === 'preparing') {
+                  newStatus = 'ready';
+                }
 
-              if (hasChanged) {
+                // Only toast once per status change using a ref
+                if (lastToastedStatus.current !== newStatus) {
+                  if (newStatus === 'preparing') {
+                    toast(`المطبخ بدأ تحضير طلبك - ${activeOrder.estimatedTime || 10} دقيقة`, { icon: '⏳', duration: 4000 });
+                  } else if (newStatus === 'ready') {
+                    toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
+                  }
+                  lastToastedStatus.current = newStatus;
+                }
+
                 return {
-                  status: activeOrder.status,
+                  status: newStatus,
                   estimatedMins: activeOrder.estimatedTime,
                   readyAt: activeOrder.estimatedReadyAt,
                   orderNumber: activeOrder.orderNumber,
                 };
-              }
-              return prev;
-            });
+              });
+            }
           }
         }
       } catch (error) {
-        console.error('Polling order status failed:', error);
+        console.error('Polling status failed:', error);
       }
     }, 5000);
 
     return () => clearInterval(intervalId);
-  }, [orderSuccess, activeSession]);
+  }, [activeSession]);
+
+  const handleSubmitFeedback = async (e) => {
+    e.preventDefault();
+    try {
+      // 1. Always Submit Feedback if they filled it (or at least hit the endpoint)
+      const feedbackPayload = {
+        customerName: feedbackName,
+        rating: feedbackRating,
+        comment: feedbackComment,
+        foodRating: foodRating,
+        serviceRating: serviceRating,
+        ambienceRating: ambienceRating
+      };
+      if (activeSession?.sessionId) feedbackPayload.session = activeSession.sessionId;
+      if (tableNumber) feedbackPayload.tableNumber = tableNumber;
+
+      await api.post('/extras/feedback', feedbackPayload);
+      
+      if (feedbackMode === 'billing') {
+        // 2. Request Bill ONLY if mode is billing
+        await api.post('/bills', {
+          sessionToken: activeSession?.token
+        });
+
+        // 3. Emit bill request socket event
+        if (socketRef.current) {
+          socketRef.current.emit('bill:request', {
+            tableNumber,
+            sessionId: activeSession?.sessionId
+          });
+        }
+        setSessionStatus("billing");
+        toast.success('🧾 تم تسجيل تقييمك وطلب الحساب بنجاح!');
+      } else {
+        toast.success('😍 شكراً لك! تم تسجيل تقييمك بنجاح');
+      }
+
+      setShowFeedbackModal(false);
+    } catch (err) {
+      console.error('Feedback submit failed:', err);
+      toast.error('حدث خطأ أثناء إرسال الطلب');
+    }
+  };
+
+  const handleAlertKitchen = () => {
+    if (kitchenAlertSent) return;
+    
+    if (socketRef.current && orderTracker) {
+      socketRef.current.emit('order:alertKitchen', {
+        tableNumber,
+        orderNumber: orderTracker.orderNumber
+      });
+      
+      setKitchenAlertSent(true);
+      setKitchenAlertTimer(60);
+      toast.success('🚨 تم تنبيه المطبخ لتسريع تحضير طلبك!', { icon: '🔔', duration: 4000 });
+    }
+  };
 
 
   const handleTableSelect = async (num) => {
@@ -196,8 +276,8 @@ export default function MenuPage() {
       }
 
       if (info.status === 'occupied') {
-        // Check if this device owns the active session
-        const savedToken = localStorage.getItem(`session_table_${num}`);
+        // Check if this device owns the active session using both specific table key and general key
+        const savedToken = localStorage.getItem(`session_table_${num}`) || localStorage.getItem('latest_session_token');
         if (savedToken) {
           try {
             const sessionCheck = await api.get(`/sessions/${savedToken}`);
@@ -206,12 +286,14 @@ export default function MenuPage() {
               const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
 
               setTableNumber(num);
+              setOrderType('dine-in');
               setShowTableModal(false);
               setConfirmStep(false);
               
               setupActiveSession(sessionData, activeOrder || null);
               
               if (activeOrder) {
+                setOrderSuccess(true);
                 toast.success('مرحباً بعودتك! جاري تجهيز طلبك.', { icon: '🍳' });
               } else {
                 toast.success('مرحباً بعودتك! يمكنك متابعة طلبك الآن.', { icon: '👋' });
@@ -326,16 +408,6 @@ export default function MenuPage() {
     socket.on('order:ready', () => {
       setOrderTracker(prev => prev ? { ...prev, status: 'ready' } : null);
       toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
-      // Reset flow after ready
-      setOrderSuccess(false);
-      setOrderType(null);
-      setTableNumber(null);
-      setResumableSession(null);
-      // Clear stored session data so resume banner disappears
-      localStorage.removeItem('latest_session_token');
-      if (orderType === 'dine-in') {
-        localStorage.removeItem(`session_table_${tableNumber}`);
-      }
     });
 
     if (orderData) {
@@ -494,6 +566,7 @@ export default function MenuPage() {
                 setTableNumber(resumableSession.sessionData.tableNumber);
                 setupActiveSession(resumableSession.sessionData, resumableSession.activeOrder);
                 setOrderType(resumedType);
+                setShowTableModal(false);
               }}
               className="w-full mb-8 bg-gradient-to-r from-green-500 to-emerald-600 p-4 rounded-2xl shadow-[0_4px_20px_rgba(34,197,94,0.3)] hover:-translate-y-1 transition-all flex items-center justify-between group"
             >
@@ -751,18 +824,73 @@ export default function MenuPage() {
   }
 
   // ─── LUXURIOUS ORDER WAITING ROOM ──────────────────────────────────────────
-  // Auto-dismiss helper: called when countdown reaches 0
   const handleCountdownDone = () => {
-    // Small delay so user sees "جاهز الآن!" briefly
+    // Optimistically show the "Ready" screen when the timer finishes!
+    // The polling logic will now respect this and won't revert it back to 'preparing'.
     setTimeout(() => {
-      toast.success('🎉 طلبك جاهز! تفضل!', { duration: 5000 });
+      setOrderTracker(prev => prev ? { ...prev, status: 'ready' } : null);
+    }, 1500);
+  };
+
+  if (sessionStatus === 'billing') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#070710] p-6 relative overflow-hidden text-center" dir="rtl">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-[100px] opacity-15 bg-primary pointer-events-none" />
+        <div className="animate-slide-up relative z-10 max-w-sm w-full bg-[#13131f] border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl">
+          <div className="w-20 h-20 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-4xl mx-auto mb-6">🧾</div>
+          <h2 className="text-2xl font-black mb-3">جاري تحضير الفاتورة...</h2>
+          <p className="text-[#9a9aad] text-sm mb-6 leading-relaxed">
+            لقد تم إرسال طلب الحساب بنجاح. النادل في طريقه إليك الآن بالفاتورة لاستكمال الدفع. شكرًا لزيارتك!
+          </p>
+          <div className="w-full bg-[#0a0a0f] rounded-2xl p-4 border border-white/5 space-y-2 mb-6">
+            <div className="text-xs text-[#5e5e72] font-medium flex justify-between">
+              <span>رقم الطاولة</span>
+              <span className="font-bold text-white">{tableNumber}</span>
+            </div>
+            <div className="text-xs text-[#5e5e72] font-medium flex justify-between">
+              <span>حالة الطلب</span>
+              <span className="text-yellow-400 font-bold">انتظار الحساب</span>
+            </div>
+          </div>
+          <p className="text-xs text-[#5e5e72] animate-pulse">ننتظر تأكيد النادل لإنهاء الجلسة...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (sessionStatus === 'completed') {
+    const handleNewSession = () => {
       setOrderSuccess(false);
       setOrderType(null);
       setTableNumber(null);
       setResumableSession(null);
+      setSessionStatus("active");
       localStorage.removeItem('latest_session_token');
-    }, 2000);
-  };
+      if (tableNumber > 0) {
+        localStorage.removeItem(`session_table_${tableNumber}`);
+      }
+      window.location.reload();
+    };
+
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#070710] p-6 relative overflow-hidden text-center" dir="rtl">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-[100px] opacity-15 bg-green-500 pointer-events-none" />
+        <div className="animate-slide-up relative z-10 max-w-sm w-full bg-[#13131f] border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl">
+          <div className="w-20 h-20 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center text-4xl mx-auto mb-6">👋</div>
+          <h2 className="text-2xl font-black mb-3">بالهناء والشفاء!</h2>
+          <p className="text-[#9a9aad] text-sm mb-8 leading-relaxed">
+            تم دفع الحساب وإغلاق الجلسة بنجاح. نتمنى أن تكون تجربتك في كافيه أرتيزان مميزة، ونسعد برؤيتك مرة أخرى قريباً!
+          </p>
+          <button
+            onClick={handleNewSession}
+            className="w-full py-4 bg-gradient-to-r from-primary to-accent text-gray-900 font-bold rounded-2xl text-lg hover:opacity-90 hover:-translate-y-1 transition-all shadow-[0_4px_20px_rgba(200,149,108,0.4)]"
+          >
+            بدء جلسة جديدة ☕
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (orderSuccess) {
     const isPreparing = orderTracker?.status === 'preparing';
@@ -809,23 +937,174 @@ export default function MenuPage() {
             </div>
           )}
 
-          <div className="space-y-4 w-full">
+          <div className="space-y-3 w-full mt-4" dir="rtl">
+
+            {/* ─── 1. نبه المطبخ (يظهر لما الأوردر في الطريق) ─── */}
+            {!isReady && (
+              <button
+                onClick={handleAlertKitchen}
+                disabled={kitchenAlertSent}
+                className={`w-full py-4 rounded-2xl font-bold text-base transition-all border flex items-center justify-center gap-2 ${
+                  kitchenAlertSent
+                    ? 'bg-yellow-500/5 border-yellow-500/20 text-yellow-500/50 cursor-not-allowed'
+                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 active:scale-95'
+                }`}
+              >
+                🔔 {kitchenAlertSent ? `تم التنبيه (انتظر ${kitchenAlertTimer} ث)` : 'الأوردر اتأخر؟ بلغ المطبخ!'}
+              </button>
+            )}
+
+            {/* ─── 2. طلب المزيد ─── */}
             <button
               onClick={() => setOrderSuccess(false)}
-              className="w-full py-4 bg-gradient-to-r from-primary to-accent text-gray-900 font-bold rounded-2xl text-lg hover:opacity-90 hover:-translate-y-1 transition-all shadow-[0_4px_20px_rgba(200,149,108,0.4)] flex items-center justify-center gap-2"
+              className="w-full py-4 bg-gradient-to-r from-primary to-accent text-gray-900 font-bold rounded-2xl text-base hover:opacity-90 hover:-translate-y-1 transition-all shadow-[0_4px_20px_rgba(200,149,108,0.4)] flex items-center justify-center gap-2"
             >
               <FaPlus size={14} /> طلب المزيد من المنيو
             </button>
+
+            {/* ─── 3 & 4. Dine-in actions ─── */}
+            {(isReady && orderType === 'dine-in') && (
+              <div className="grid grid-cols-2 gap-3">
+                {/* قولي رياك */}
+                <button
+                  onClick={() => { setFeedbackMode('review'); setShowFeedbackModal(true); }}
+                  className="py-4 bg-purple-500/10 border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 font-bold rounded-2xl text-sm transition-all flex flex-col items-center justify-center gap-1 active:scale-95"
+                >
+                  <span className="text-2xl">😍</span>
+                  قولي رياك
+                </button>
+
+                {/* إنهاء الجلسة والحساب */}
+                <button
+                  onClick={() => { setFeedbackMode('billing'); setShowFeedbackModal(true); }}
+                  className="py-4 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 font-bold rounded-2xl text-sm transition-all flex flex-col items-center justify-center gap-1 active:scale-95"
+                >
+                  <span className="text-2xl">🧾</span>
+                  إنهاء وطلب الحساب
+                </button>
+              </div>
+            )}
+
             {!isReady && (
               <button
                 onClick={() => setOrderSuccess(false)}
-                className="w-full py-4 bg-[#13131f] border border-white/10 text-white font-bold rounded-2xl hover:bg-white/5 transition-all"
+                className="w-full py-3 bg-[#13131f] border border-white/10 text-[#9a9aad] font-medium rounded-2xl hover:bg-white/5 transition-all text-sm"
               >
                 تصفح المنيو فقط
               </button>
             )}
           </div>
+
         </div>
+
+        {/* Feedback & Review Modal (inside orderSuccess block) */}
+        {showFeedbackModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4" dir="rtl">
+            <div className="bg-[#13131f] border border-white/10 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-slide-up text-center">
+              <h2 className="text-2xl font-black text-primary mb-2">قولي رياك! 😍</h2>
+              <p className="text-[#9a9aad] text-xs mb-6">يسعدنا معرفة رأيك لتقديم أفضل تجربة لك دائماً</p>
+              
+              <form onSubmit={handleSubmitFeedback} className="space-y-5">
+                {/* Emoticon Rating */}
+                <div>
+                  <p className="text-sm text-white font-bold mb-3">كيف كانت تجربتك الكلية؟</p>
+                  <div className="flex justify-between items-center gap-2 bg-[#0a0a0f] p-3 rounded-2xl border border-white/5">
+                    {[
+                      { val: 1, emo: '😡', label: 'سيء' },
+                      { val: 2, emo: '😕', label: 'مقبول' },
+                      { val: 3, emo: '🙂', label: 'جيد' },
+                      { val: 4, emo: '😍', label: 'ممتاز' },
+                      { val: 5, emo: '👑', label: 'خرافي!' }
+                    ].map(opt => (
+                      <button
+                        type="button"
+                        key={opt.val}
+                        onClick={() => setFeedbackRating(opt.val)}
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
+                          feedbackRating === opt.val
+                            ? 'bg-primary/20 scale-110 border border-primary/30'
+                            : 'opacity-50 hover:opacity-100'
+                        }`}
+                      >
+                        <span className="text-3xl">{opt.emo}</span>
+                        <span className="text-[10px] font-bold text-[#9a9aad]">{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sub-ratings */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { name: 'الطعام 🍔', val: foodRating, set: setFoodRating },
+                    { name: 'الخدمة 👨‍💼', val: serviceRating, set: setServiceRating },
+                    { name: 'المكان 🏡', val: ambienceRating, set: setAmbienceRating }
+                  ].map(sub => (
+                    <div key={sub.name} className="bg-[#0a0a0f] p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
+                      <span className="text-xs font-bold text-[#9a9aad] mb-1.5">{sub.name}</span>
+                      <div className="flex gap-0.5">
+                        {[1, 2, 3, 4, 5].map(star => (
+                          <button
+                            type="button"
+                            key={star}
+                            onClick={() => sub.set(star)}
+                            className={`text-xs transition-colors ${
+                              star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
+                            }`}
+                          >
+                            ★
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Name & Comment Box */}
+                <div className="text-right flex flex-col gap-3">
+                  <div>
+                    <label className="text-xs text-[#9a9aad] mb-1.5 block">الاسم (اختياري)</label>
+                    <input
+                      type="text"
+                      className="w-full bg-[#0a0a0f] border border-white/10 text-right text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-primary transition-all text-white"
+                      placeholder="اسمك الكريم..."
+                      value={feedbackName}
+                      onChange={(e) => setFeedbackName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#9a9aad] mb-1.5 block">اكتب تعليقك (اختياري)</label>
+                    <textarea
+                      className="w-full bg-[#0a0a0f] border border-white/10 text-right text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-primary transition-all resize-none text-white"
+                      placeholder="رأيك يهمنا... ما الذي أعجبك وما الذي يمكننا تحسينه؟"
+                      rows={2}
+                      value={feedbackComment}
+                      onChange={(e) => setFeedbackComment(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowFeedbackModal(false)}
+                    className="flex-1 py-3.5 rounded-2xl border border-white/10 text-[#9a9aad] hover:bg-white/5 transition-colors font-bold text-sm"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-2 flex-grow-[2] py-3.5 rounded-2xl bg-gradient-to-r from-primary to-accent text-gray-900 font-bold hover:opacity-90 transition-all shadow-[0_4px_15px_rgba(200,149,108,0.4)] text-sm"
+                  >
+                    {feedbackMode === 'billing' ? 'إرسال وطلب الحساب 🧾' : 'إرسال التقييم 😍'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </div>
     );
   }
@@ -854,9 +1133,19 @@ export default function MenuPage() {
             <span className="text-green-400 font-bold text-sm">تيك أوي{customerName ? ` — ${customerName}` : ''}</span>
           </div>
         ) : (
-          <div className="inline-flex items-center gap-2 mt-2 bg-primary/10 border border-primary/30 rounded-full px-4 py-1.5">
-            <FaChair size={12} className="text-primary" />
-            <span className="text-primary font-bold text-sm">طاولة رقم {tableNumber}</span>
+          <div className="flex flex-col items-center gap-2 mt-2">
+            <div className="inline-flex items-center gap-2 bg-primary/10 border border-primary/30 rounded-full px-4 py-1.5">
+              <FaChair size={12} className="text-primary" />
+              <span className="text-primary font-bold text-sm">طاولة رقم {tableNumber}</span>
+            </div>
+            {activeSession && (
+              <button 
+                onClick={() => setShowFeedbackModal(true)}
+                className="mt-1 text-xs text-red-400 font-bold border border-red-500/20 hover:bg-red-500/10 px-3 py-1 rounded-full flex items-center gap-1 transition-all"
+              >
+                🧾 طلب الحساب وإنهاء الجلسة
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1077,6 +1366,114 @@ export default function MenuPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Feedback & Review Modal */}
+      {showFeedbackModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4" dir="rtl">
+          <div className="bg-[#13131f] border border-white/10 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-slide-up text-center">
+            <h2 className="text-2xl font-black text-primary mb-2">قولي رياك! 😍</h2>
+            <p className="text-[#9a9aad] text-xs mb-6">يسعدنا معرفة رأيك لتقديم أفضل تجربة لك دائماً</p>
+            
+            <form onSubmit={handleSubmitFeedback} className="space-y-5">
+              {/* Emoticon Rating */}
+              <div>
+                <p className="text-sm text-white font-bold mb-3">كيف كانت تجربتك الكلية؟</p>
+                <div className="flex justify-between items-center gap-2 bg-[#0a0a0f] p-3 rounded-2xl border border-white/5">
+                  {[
+                    { val: 1, emo: '😡', label: 'سيء' },
+                    { val: 2, emo: '😕', label: 'مقبول' },
+                    { val: 3, emo: '🙂', label: 'جيد' },
+                    { val: 4, emo: '😍', label: 'ممتاز' },
+                    { val: 5, emo: '👑', label: 'خرافي!' }
+                  ].map(opt => (
+                    <button
+                      type="button"
+                      key={opt.val}
+                      onClick={() => setFeedbackRating(opt.val)}
+                      className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
+                        feedbackRating === opt.val
+                          ? 'bg-primary/20 scale-110 border border-primary/30'
+                          : 'opacity-50 hover:opacity-100'
+                      }`}
+                    >
+                      <span className="text-3xl">{opt.emo}</span>
+                      <span className="text-[10px] font-bold text-[#9a9aad]">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sub-ratings */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { name: 'الطعام 🍔', val: foodRating, set: setFoodRating },
+                  { name: 'الخدمة 👨‍💼', val: serviceRating, set: setServiceRating },
+                  { name: 'المكان 🏡', val: ambienceRating, set: setAmbienceRating }
+                ].map(sub => (
+                  <div key={sub.name} className="bg-[#0a0a0f] p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
+                    <span className="text-xs font-bold text-[#9a9aad] mb-1.5">{sub.name}</span>
+                    <div className="flex gap-0.5">
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <button
+                          type="button"
+                          key={star}
+                          onClick={() => sub.set(star)}
+                          className={`text-xs transition-colors ${
+                            star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
+                          }`}
+                        >
+                          ★
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Name & Comment Box */}
+              <div className="text-right flex flex-col gap-3">
+                <div>
+                  <label className="text-xs text-[#9a9aad] mb-1.5 block">الاسم (اختياري)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-[#0a0a0f] border border-white/10 text-right text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-primary transition-all text-white"
+                    placeholder="اسمك الكريم..."
+                    value={feedbackName}
+                    onChange={(e) => setFeedbackName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-[#9a9aad] mb-1.5 block">اكتب تعليقك (اختياري)</label>
+                  <textarea
+                    className="w-full bg-[#0a0a0f] border border-white/10 text-right text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-primary transition-all resize-none text-white"
+                    placeholder="رأيك يهمنا... ما الذي أعجبك وما الذي يمكننا تحسينه؟"
+                    rows={2}
+                    value={feedbackComment}
+                    onChange={(e) => setFeedbackComment(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowFeedbackModal(false)}
+                  className="flex-1 py-3.5 rounded-2xl border border-white/10 text-[#9a9aad] hover:bg-white/5 transition-colors font-bold text-sm"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex-2 flex-grow-[2] py-3.5 rounded-2xl bg-gradient-to-r from-primary to-accent text-gray-900 font-bold hover:opacity-90 transition-all shadow-[0_4px_15px_rgba(200,149,108,0.4)] text-sm"
+                >
+                  {feedbackMode === 'billing' ? 'إرسال وطلب الحساب 🧾' : 'إرسال التقييم 😍'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
     </div>
