@@ -9,15 +9,15 @@ import {
 
 const STATUS_LABELS = {
   available: { label: 'متاحة', color: 'text-green-400', bg: 'bg-green-400/10 border-green-400/30' },
-  occupied:  { label: 'مشغولة', color: 'text-yellow-400', bg: 'bg-yellow-400/10 border-yellow-400/30' },
-  reserved:  { label: 'محجوزة', color: 'text-blue-400',  bg: 'bg-blue-400/10 border-blue-400/30'   },
-  cleaning:  { label: 'تنظيف',  color: 'text-purple-400', bg: 'bg-purple-400/10 border-purple-400/30' },
+  occupied: { label: 'مشغولة', color: 'text-yellow-400', bg: 'bg-yellow-400/10 border-yellow-400/30' },
+  reserved: { label: 'محجوزة', color: 'text-blue-400', bg: 'bg-blue-400/10 border-blue-400/30' },
+  cleaning: { label: 'تنظيف', color: 'text-purple-400', bg: 'bg-purple-400/10 border-purple-400/30' },
 };
 
 const ORDER_STATUS = {
-  pending:   { label: 'انتظار', color: 'bg-yellow-400/20 text-yellow-400' },
+  pending: { label: 'انتظار', color: 'bg-yellow-400/20 text-yellow-400' },
   preparing: { label: 'تحضير', color: 'bg-blue-400/20 text-blue-400' },
-  ready:     { label: 'جاهز',  color: 'bg-green-400/20 text-green-400' },
+  ready: { label: 'جاهز', color: 'bg-green-400/20 text-green-400' },
   delivered: { label: 'تم التوصيل', color: 'bg-gray-400/20 text-gray-400' },
 };
 
@@ -26,6 +26,7 @@ export default function AdminTablesPage() {
   const [sessions, setSessions] = useState({});   // tableId → session with orders
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState({}); // tableId → bool
+  const [adminBill, setAdminBill] = useState(null); // Bill to view
 
   const fetchTables = useCallback(async () => {
     setLoading(true);
@@ -93,7 +94,7 @@ export default function AdminTablesPage() {
 
   const occupied = tables.filter(t => t.status === 'occupied').length;
   const available = tables.filter(t => t.status === 'available' && !t.isBlocked).length;
-  const blocked  = tables.filter(t => t.isBlocked).length;
+  const blocked = tables.filter(t => t.isBlocked).length;
 
   return (
     <div>
@@ -143,25 +144,22 @@ export default function AdminTablesPage() {
             return (
               <div
                 key={table._id}
-                className={`bg-card rounded-2xl border overflow-hidden transition-all flex flex-col ${
-                  table.isBlocked
+                className={`bg-card rounded-2xl border overflow-hidden transition-all flex flex-col ${table.isBlocked
                     ? 'border-red-500/30 opacity-75'
                     : table.status === 'occupied'
-                    ? 'border-yellow-400/30 shadow-[0_0_25px_rgba(250,204,21,0.08)]'
-                    : 'border-white/5'
-                }`}
+                      ? 'border-yellow-400/30 shadow-[0_0_25px_rgba(250,204,21,0.08)]'
+                      : 'border-white/5'
+                  }`}
               >
                 {/* Card Header */}
-                <div className={`px-4 py-3 md:px-5 md:py-4 flex items-center justify-between ${
-                  table.isBlocked ? 'bg-red-500/10' :
-                  table.status === 'occupied' ? 'bg-yellow-400/5' : 'bg-elevated/50'
-                }`}>
+                <div className={`px-4 py-3 md:px-5 md:py-4 flex items-center justify-between ${table.isBlocked ? 'bg-red-500/10' :
+                    table.status === 'occupied' ? 'bg-yellow-400/5' : 'bg-elevated/50'
+                  }`}>
                   <div className="flex items-center gap-2 md:gap-3">
-                    <div className={`w-8 h-8 md:w-10 md:h-10 rounded-xl flex items-center justify-center font-black text-base md:text-lg ${
-                      table.isBlocked ? 'bg-red-500/20 text-red-400' :
-                      table.status === 'occupied' ? 'bg-yellow-400/20 text-yellow-400' :
-                      'bg-green-400/10 text-green-400'
-                    }`}>
+                    <div className={`w-8 h-8 md:w-10 md:h-10 rounded-xl flex items-center justify-center font-black text-base md:text-lg ${table.isBlocked ? 'bg-red-500/20 text-red-400' :
+                        table.status === 'occupied' ? 'bg-yellow-400/20 text-yellow-400' :
+                          'bg-green-400/10 text-green-400'
+                      }`}>
                       {table.number}
                     </div>
                     <div>
@@ -233,11 +231,10 @@ export default function AdminTablesPage() {
                   <button
                     onClick={() => toggleBlock(table)}
                     disabled={isLoading}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold transition-all border ${
-                      table.isBlocked
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold transition-all border ${table.isBlocked
                         ? 'bg-green-400/10 text-green-400 border-green-400/20 hover:bg-green-400/20'
                         : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20'
-                    } disabled:opacity-50`}
+                      } disabled:opacity-50`}
                   >
                     {isLoading ? <FaSpinner className="animate-spin" /> :
                       table.isBlocked ? <><FaLockOpen size={10} className="md:w-3 md:h-3" /> فتح الطاولة</> : <><FaLock size={10} className="md:w-3 md:h-3" /> إغلاق الطاولة</>
@@ -246,13 +243,33 @@ export default function AdminTablesPage() {
 
                   {/* Close Session — only when occupied */}
                   {table.status === 'occupied' && !table.isBlocked && (
-                    <button
-                      onClick={() => closeSession(table)}
-                      disabled={isLoading}
-                      className="flex-1 flex items-center justify-center gap-2 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-all disabled:opacity-50"
-                    >
-                      {isLoading ? <FaSpinner className="animate-spin" /> : <><FaTimesCircle size={10} className="md:w-3 md:h-3" /> إنهاء الجلسة</>}
-                    </button>
+                    <div className="flex-1 flex gap-2">
+                      <button
+                        onClick={() => closeSession(table)}
+                        disabled={isLoading}
+                        className="flex-1 flex items-center justify-center gap-2 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-all disabled:opacity-50"
+                      >
+                        {isLoading ? <FaSpinner className="animate-spin" /> : <><FaTimesCircle size={10} className="md:w-3 md:h-3" /> إنهاء الجلسة</>}
+                      </button>
+
+                      {session?.status === 'billing' && (
+                        <button
+                          onClick={() => {
+                            // Open bill details Modal
+                            toast('جاري تحميل الفاتورة...', { icon: '🧾' });
+                            // For now just show alert, we need to fetch bill
+                            api.get(`/bills/session/${session.sessionToken}`).then(res => {
+                              if (res.data.success) {
+                                setAdminBill(res.data.data);
+                              }
+                            });
+                          }}
+                          className="flex-1 flex items-center justify-center gap-2 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold bg-blue-400/10 text-blue-400 border border-blue-400/20 hover:bg-blue-400/20 transition-all disabled:opacity-50"
+                        >
+                          عرض الفاتورة
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -260,6 +277,72 @@ export default function AdminTablesPage() {
           })}
         </div>
       )}
+
+      {/* Admin Bill View Modal */}
+      {adminBill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" dir="rtl">
+          <div className="bg-[#13131f] border border-white/10 rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-scale-up">
+            <div className="p-4 border-b border-white/5 flex justify-between items-center bg-elevated/50 rounded-t-2xl">
+              <h3 className="font-bold text-lg text-white">تفاصيل الفاتورة - طاولة {adminBill.tableNumber}</h3>
+              <button onClick={() => setAdminBill(null)} className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-red-500/20 hover:text-red-400 transition-colors">✕</button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-4">
+              <div className="flex justify-between items-center bg-[#0a0a0f] p-3 rounded-xl border border-white/5">
+                <div>
+                  <p className="text-[#9a9aad] text-xs">رقم الفاتورة</p>
+                  <p className="font-bold" dir="ltr">{adminBill.orderReference}</p>
+                </div>
+                <div className="text-left">
+                  <p className="text-[#9a9aad] text-xs">طريقة الدفع</p>
+                  <p className="font-bold text-primary">{adminBill.paymentMethod === 'instagram' ? 'إنستا/فودافون' : 'كاش'}</p>
+                </div>
+              </div>
+
+              {adminBill.receiptUrl && (
+                <div>
+                  <p className="font-bold text-sm mb-2 text-white">صورة الإيصال المرفقة:</p>
+                  <img src={adminBill.receiptUrl} alt="Receipt" className="w-full h-auto max-h-[300px] object-contain rounded-xl border border-white/10 bg-black/50" />
+                </div>
+              )}
+
+              <div className="bg-[#0a0a0f] p-3 rounded-xl border border-white/5">
+                <p className="font-bold text-sm mb-2">الملخص:</p>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-[#9a9aad]">المجموع</span>
+                  <span>{adminBill.subtotal?.toFixed(2)} EGP</span>
+                </div>
+                {adminBill.taxAmount > 0 && (
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-[#9a9aad]">الضريبة ({(adminBill.taxRate * 100).toFixed(0)}%)</span>
+                    <span>{adminBill.taxAmount?.toFixed(2)} EGP</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-bold text-lg text-primary pt-2 border-t border-white/10 mt-2">
+                  <span>الإجمالي</span>
+                  <span>{adminBill.total?.toFixed(2)} EGP</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-white/5 bg-elevated/50 rounded-b-2xl">
+              <button
+                onClick={() => {
+                  const table = tables.find(t => t.number === adminBill.tableNumber);
+                  if (table) {
+                    closeSession(table);
+                    setAdminBill(null);
+                  }
+                }}
+                className="w-full py-3 rounded-xl bg-green-500/20 text-green-400 font-bold hover:bg-green-500/30 transition-colors"
+              >
+                تأكيد الدفع وإنهاء الجلسة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

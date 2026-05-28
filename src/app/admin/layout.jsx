@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FaChartPie, FaUsers, FaBoxOpen, FaCog, FaStore, FaCoffee, FaLock, FaChair, FaBars, FaTimes } from 'react-icons/fa';
+import { FaChartPie, FaUsers, FaBoxOpen, FaCog, FaStore, FaCoffee, FaLock, FaChair, FaBars, FaTimes, FaMoneyCheckAlt } from 'react-icons/fa';
 import { login, getMe } from '@/lib/api';
 
 export default function AdminLayout({ children }) {
@@ -161,6 +161,10 @@ export default function AdminLayout({ children }) {
           <Link href="/admin/orders" className={`${linkBase} ${isActive('/admin/orders') ? linkActive : ''}`}>
             <FaBoxOpen className="text-xl w-6 text-center" />
             الطلبات
+          </Link>
+          <Link href="/admin/payments" className={`${linkBase} ${isActive('/admin/payments') ? linkActive : ''}`}>
+            <FaMoneyCheckAlt className="text-xl w-6 text-center" />
+            تأكيدات الدفع
           </Link>
           <Link href="/admin/menu" className={`${linkBase} ${isActive('/admin/menu') ? linkActive : ''}`}>
             <FaCoffee className="text-xl w-6 text-center" />

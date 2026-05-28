@@ -6,14 +6,15 @@ import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
   const { settings, updateSettings, loading } = useSettings();
-  const [formData, setFormData] = useState({ cafeName: '', primaryColor: '#c8956c' });
+  const [formData, setFormData] = useState({ cafeName: '', primaryColor: '#c8956c', taxRate: 0 });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!loading && settings) {
       setFormData({
         cafeName: settings.cafeName || 'كافيه أرتيزان',
-        primaryColor: settings.primaryColor || '#c8956c'
+        primaryColor: settings.primaryColor || '#c8956c',
+        taxRate: settings.taxRate || 0
       });
     }
   }, [settings, loading]);
@@ -77,6 +78,20 @@ export default function SettingsPage() {
                   className="bg-[#111118] border border-white/10 rounded-xl px-3 py-2 md:px-4 md:py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-xs md:text-sm flex-1 dir-ltr" 
                 />
               </div>
+            </div>
+            <div className="flex flex-col gap-1.5 md:gap-2">
+              <label className="text-xs md:text-sm font-bold text-[#9a9aad]">الضريبة (%)</label>
+              <input 
+                type="number" 
+                min="0"
+                max="100"
+                step="0.1"
+                value={formData.taxRate}
+                onChange={(e) => setFormData(p => ({ ...p, taxRate: parseFloat(e.target.value) || 0 }))}
+                className="bg-[#111118] border border-white/10 rounded-xl px-3 py-2 md:px-4 md:py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-xs md:text-sm w-full text-start" 
+                dir="ltr" 
+              />
+              <span className="text-[10px] text-[#5e5e72]">ضع القيمة 0 لإلغاء الضريبة تماماً</span>
             </div>
             <div className="flex flex-col gap-1.5 md:gap-2">
               <label className="text-xs md:text-sm font-bold text-[#9a9aad]">رقم الهاتف</label>

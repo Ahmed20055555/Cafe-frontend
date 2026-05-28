@@ -35,7 +35,7 @@ export default function AdminDashboard() {
         }
 
         // Fetch Recent Feedback
-        const feedbackRes = await api.get('/extras/feedback');
+        const feedbackRes = await api.get('/feedback');
         if (feedbackRes.data.success) {
           setRecentFeedback(feedbackRes.data.data.slice(0, 5));
         }
@@ -192,7 +192,9 @@ export default function AdminDashboard() {
                   <div>
                     <div className="font-bold text-sm md:text-base flex items-center gap-2">
                       {fb.customerName || 'عميل غير معروف'}
-                      <span className="bg-primary/20 text-primary text-[10px] px-2 py-0.5 rounded-full font-bold">طاولة {fb.tableNumber || '-'}</span>
+                      <span className="bg-primary/20 text-primary text-[10px] px-2 py-0.5 rounded-full font-bold">
+                        {fb.tableNumber === 0 ? 'سفري / ديليفري' : fb.tableNumber === 99 ? 'تصفح' : (fb.tableNumber !== undefined && fb.tableNumber !== null) ? `طاولة ${fb.tableNumber}` : '-'}
+                      </span>
                     </div>
                   </div>
                   <div className="flex gap-0.5" dir="ltr">

@@ -68,9 +68,27 @@ export default function MenuPage() {
   const [foodRating, setFoodRating] = useState(5);
   const [serviceRating, setServiceRating] = useState(5);
   const [ambienceRating, setAmbienceRating] = useState(5);
-  const [sessionStatus, setSessionStatus] = useState("active"); // active, billing, completed
+  const [sessionStatus, setSessionStatus] = useState("active");
   const [kitchenAlertSent, setKitchenAlertSent] = useState(false);
   const [kitchenAlertTimer, setKitchenAlertTimer] = useState(0);
+  const [isTimeOver, setIsTimeOver] = useState(false);
+
+  // ─── Invoice / Payment Modal State ────────────────────────────────────────
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [invoiceData, setInvoiceData] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('cash'); // 'cash' | 'instagram'
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [receiptPreview, setReceiptPreview] = useState(null);
+  const [invoiceSubmitting, setInvoiceSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (orderTracker?.readyAt) {
+      const remaining = new Date(orderTracker.readyAt) - Date.now();
+      setIsTimeOver(remaining <= 0);
+    } else {
+      setIsTimeOver(false);
+    }
+  }, [orderTracker?.readyAt]);
 
   const TOTAL_TABLES = 10;
 
@@ -111,10 +129,10 @@ export default function MenuPage() {
     if (!token) return;
     try {
       const res = await api.get(`/sessions/${token}`);
-      if (res.data.success && res.data.data.status === 'active') {
+      if (res.data.success && ['active', 'billing', 'completed'].includes(res.data.data.status)) {
         const sessionData = res.data.data;
         const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
-        
+
         // Only set resumableSession so the green banner appears, letting the user choose whether to resume or pick a table manually
         setResumableSession({ sessionData, activeOrder: activeOrder || null });
       }
@@ -153,6 +171,26 @@ export default function MenuPage() {
     return () => clearInterval(id);
   }, [kitchenAlertTimer]);
 
+  // ─── Fetch Invoice Data if session is in billing state ───────────────────
+  useEffect(() => {
+    if (sessionStatus === 'billing' && !invoiceData && activeSession?.token) {
+      const fetchBill = async () => {
+        try {
+          const res = await api.post('/bills', {
+            sessionToken: activeSession.token
+          });
+          if (res.data.success) {
+            setInvoiceData(res.data.data);
+            setShowInvoiceModal(true);
+          }
+        } catch (err) {
+          console.error('Failed to fetch bill:', err);
+        }
+      };
+      fetchBill();
+    }
+  }, [sessionStatus, invoiceData, activeSession]);
+
   // ─── Polling Fallback for Session/Order Status ────────────────────────────
   useEffect(() => {
     if (!activeSession?.token) return;
@@ -162,29 +200,25 @@ export default function MenuPage() {
         const res = await api.get(`/sessions/${activeSession.token}`);
         if (res.data.success) {
           const sessionData = res.data.data;
-          setSessionStatus(sessionData.status); // active, billing, completed
           
+          setSessionStatus(prevStatus => {
+            // If we are waiting for payment, only allow transition to completed
+            if (prevStatus === 'payment_sent') {
+              if (sessionData.status === 'completed') return 'completed';
+              return prevStatus;
+            }
+            return sessionData.status;
+          });
+
           if (sessionData.status === 'active') {
             const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
-            
+
             if (activeOrder) {
+              let newStatus = activeOrder.status;
+              
               setOrderTracker(prev => {
-                let newStatus = activeOrder.status;
-                
-                // If local status is already 'ready' (due to countdown finishing) for the SAME order,
-                // do NOT downgrade it back to 'preparing' even if backend hasn't updated yet.
                 if (prev?.orderNumber === activeOrder.orderNumber && prev?.status === 'ready' && activeOrder.status === 'preparing') {
                   newStatus = 'ready';
-                }
-
-                // Only toast once per status change using a ref
-                if (lastToastedStatus.current !== newStatus) {
-                  if (newStatus === 'preparing') {
-                    toast(`المطبخ بدأ تحضير طلبك - ${activeOrder.estimatedTime || 10} دقيقة`, { icon: '⏳', duration: 4000 });
-                  } else if (newStatus === 'ready') {
-                    toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
-                  }
-                  lastToastedStatus.current = newStatus;
                 }
 
                 return {
@@ -194,6 +228,16 @@ export default function MenuPage() {
                   orderNumber: activeOrder.orderNumber,
                 };
               });
+
+              // Toast outside of setState
+              if (lastToastedStatus.current !== newStatus) {
+                if (newStatus === 'preparing') {
+                  toast(`المطبخ بدأ تحضير طلبك - ${activeOrder.estimatedTime || 10} دقيقة`, { icon: '⏳', duration: 4000 });
+                } else if (newStatus === 'ready') {
+                  toast.success('🎉 طلبك جاهز! تفضل!', { duration: 6000 });
+                }
+                lastToastedStatus.current = newStatus;
+              }
             }
           }
         }
@@ -218,10 +262,17 @@ export default function MenuPage() {
         ambienceRating: ambienceRating
       };
       if (activeSession?.sessionId) feedbackPayload.session = activeSession.sessionId;
-      if (tableNumber) feedbackPayload.tableNumber = tableNumber;
 
-      await api.post('/extras/feedback', feedbackPayload);
-      
+      const numericTable = (orderType === 'takeaway' || orderType === 'delivery') ? 0
+        : (tableNumber === 'browse' || orderType === 'browse') ? 99
+          : (tableNumber !== null && tableNumber !== undefined && tableNumber !== '') ? Number(tableNumber) : NaN;
+
+      if (!isNaN(numericTable)) {
+        feedbackPayload.tableNumber = numericTable;
+      }
+
+      await api.post('/feedback', feedbackPayload);
+
       if (feedbackMode === 'billing') {
         // 2. Request Bill ONLY if mode is billing
         await api.post('/bills', {
@@ -248,15 +299,71 @@ export default function MenuPage() {
     }
   };
 
+  // ─── طلب الفاتورة مباشرة (بدون تقييم) ────────────────────────────────────
+  const handleRequestBill = async () => {
+    if (!activeSession?.token) return toast.error('لا توجد جلسة نشطة');
+    try {
+      const res = await api.post('/bills', {
+        sessionToken: activeSession.token,
+        paymentMethod: 'cash'
+      });
+      const bill = res.data.data;
+      setInvoiceData(bill);
+      setPaymentMethod('cash');
+      setReceiptFile(null);
+      setReceiptPreview(null);
+      setSessionStatus('billing');
+      setShowInvoiceModal(true);
+    } catch (err) {
+      console.error('Bill request failed:', err.response?.data || err);
+      toast.error(err.response?.data?.message || 'حدث خطأ أثناء إنشاء الفاتورة');
+    }
+  };
+
+  // ─── تأكيد الدفع وإنهاء الجلسة ─────────────────────────────────────────
+  const handleConfirmPayment = async () => {
+    if (!invoiceData?._id) return;
+    setInvoiceSubmitting(true);
+    try {
+      let uploadedUrl = null;
+      if (receiptFile) {
+        const formData = new FormData();
+        formData.append('receipt', receiptFile);
+        const uploadRes = await api.post('/upload/receipt', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        uploadedUrl = uploadRes.data.url;
+      }
+
+      await api.patch(`/bills/${invoiceData._id}/receipt-url`, {
+        receiptUrl: uploadedUrl,
+        paymentMethod: paymentMethod === 'instagram' ? 'card' : 'cash'
+      });
+
+      setShowInvoiceModal(false);
+      setInvoiceData(null);
+      setSessionStatus('payment_sent');
+      setOrderSuccess(false);
+      toast.success('✅ تم إرسال الطلب، يرجى الانتظار لتأكيد الدفع...', { duration: 5000 });
+      
+    } catch (err) {
+      console.error('Payment confirm failed:', err);
+      toast.error('حدث خطأ أثناء تأكيد الدفع');
+    } finally {
+      setInvoiceSubmitting(false);
+    }
+  };
+
   const handleAlertKitchen = () => {
     if (kitchenAlertSent) return;
-    
+
+
     if (socketRef.current && orderTracker) {
       socketRef.current.emit('order:alertKitchen', {
         tableNumber,
         orderNumber: orderTracker.orderNumber
       });
-      
+
       setKitchenAlertSent(true);
       setKitchenAlertTimer(60);
       toast.success('🚨 تم تنبيه المطبخ لتسريع تحضير طلبك!', { icon: '🔔', duration: 4000 });
@@ -281,7 +388,7 @@ export default function MenuPage() {
         if (savedToken) {
           try {
             const sessionCheck = await api.get(`/sessions/${savedToken}`);
-            if (sessionCheck.data.success && sessionCheck.data.data.status === 'active' && sessionCheck.data.data.tableNumber === num) {
+            if (sessionCheck.data.success && ['active', 'billing', 'completed'].includes(sessionCheck.data.data.status) && sessionCheck.data.data.tableNumber === num) {
               const sessionData = sessionCheck.data.data;
               const activeOrder = sessionData.orders?.reverse().find(o => ['pending', 'preparing', 'ready'].includes(o.status));
 
@@ -289,9 +396,9 @@ export default function MenuPage() {
               setOrderType('dine-in');
               setShowTableModal(false);
               setConfirmStep(false);
-              
+
               setupActiveSession(sessionData, activeOrder || null);
-              
+
               if (activeOrder) {
                 setOrderSuccess(true);
                 toast.success('مرحباً بعودتك! جاري تجهيز طلبك.', { icon: '🍳' });
@@ -305,11 +412,12 @@ export default function MenuPage() {
           }
         }
 
-        // Block any other device!
-        toast.error('هذه الطاولة مشغولة حالياً 🪑 الرجاء اختيار طاولة أخرى أو انتظر حتى يُنهي الأدمن الجلسة.', {
-          duration: 5000,
-          icon: '⛔',
-        });
+        // Allow joining an occupied table even without token (friends joining the same table)
+        toast.success(`أهلاً بك! تم الانضمام للطاولة رقم ${num} المشغولة. يمكنك إضافة طلباتك الآن.`, { icon: '🤝' });
+        setTableNumber(num);
+        setOrderType('dine-in');
+        setShowTableModal(false);
+        setConfirmStep(false);
         return;
       }
 
@@ -382,6 +490,9 @@ export default function MenuPage() {
 
   const setupActiveSession = (sessionData, orderData = null) => {
     setActiveSession({ token: sessionData.sessionToken, sessionId: sessionData._id });
+    if (sessionData.status) {
+      setSessionStatus(sessionData.status);
+    }
 
     const socket = connectSocket();
     socketRef.current = socket;
@@ -636,7 +747,7 @@ export default function MenuPage() {
 
                 setTableNumber(resumableSession.sessionData.tableNumber);
                 setupActiveSession(resumableSession.sessionData, resumableSession.activeOrder);
-                setOrderType(resumedType); 
+                setOrderType(resumedType);
                 setShowTableModal(false);
               }}
               className="w-full mb-6 bg-gradient-to-r from-green-500 to-emerald-600 p-3 rounded-2xl shadow-[0_4px_20px_rgba(34,197,94,0.3)] hover:-translate-y-1 transition-all flex items-center justify-between group relative z-20"
@@ -797,22 +908,25 @@ export default function MenuPage() {
                 <div className="mt-8">
                   <p className="text-xs text-[#5e5e72] font-bold mb-3 text-center uppercase tracking-wider">اختر طاولتك بسرعة</p>
                   <div className="grid grid-cols-4 gap-2">
-                    {Object.entries(tableStatuses).map(([num, status]) => (
-                      <button
-                        key={num}
-                        onClick={() => status !== 'blocked' && handleTableSelect(parseInt(num))}
-                        disabled={status === 'blocked'}
-                        className={`h-10 rounded-xl text-sm font-bold transition-all border ${status === 'blocked'
+                    {Object.entries(tableStatuses)
+                      .filter(([num]) => parseInt(num) > 0)
+                      .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                      .map(([num, status]) => (
+                        <button
+                          key={num}
+                          onClick={() => status !== 'blocked' && handleTableSelect(parseInt(num))}
+                          disabled={status === 'blocked'}
+                          className={`h-10 rounded-xl text-sm font-bold transition-all border ${status === 'blocked'
                             ? 'bg-red-500/10 border-red-500/30 text-red-400 cursor-not-allowed'
                             : status === 'occupied'
                               ? 'bg-yellow-400/10 border-yellow-400/40 text-yellow-400 hover:bg-yellow-400/20 shadow-[0_0_10px_rgba(250,204,21,0.2)]'
                               : 'bg-green-400/5 border-white/10 text-white hover:bg-primary/20 hover:border-primary/40 hover:text-primary'
-                          }`}
-                        title={status === 'blocked' ? 'تم حجز هذه الطاولة' : status === 'occupied' ? 'مشغولة' : 'متاحة'}
-                      >
-                        {status === 'blocked' ? '🔒' : num}
-                      </button>
-                    ))}
+                            }`}
+                          title={status === 'blocked' ? 'تم حجز هذه الطاولة' : status === 'occupied' ? 'مشغولة' : 'متاحة'}
+                        >
+                          {status === 'blocked' ? '🔒' : num}
+                        </button>
+                      ))}
                   </div>
                 </div>
               )}
@@ -825,34 +939,27 @@ export default function MenuPage() {
 
   // ─── LUXURIOUS ORDER WAITING ROOM ──────────────────────────────────────────
   const handleCountdownDone = () => {
-    // Optimistically show the "Ready" screen when the timer finishes!
-    // The polling logic will now respect this and won't revert it back to 'preparing'.
-    setTimeout(() => {
-      setOrderTracker(prev => prev ? { ...prev, status: 'ready' } : null);
-    }, 1500);
+    setIsTimeOver(true);
   };
 
-  if (sessionStatus === 'billing') {
+
+  if (sessionStatus === 'payment_sent') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#070710] p-6 relative overflow-hidden text-center" dir="rtl">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-[100px] opacity-15 bg-primary pointer-events-none" />
         <div className="animate-slide-up relative z-10 max-w-sm w-full bg-[#13131f] border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl">
-          <div className="w-20 h-20 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-4xl mx-auto mb-6">🧾</div>
-          <h2 className="text-2xl font-black mb-3">جاري تحضير الفاتورة...</h2>
-          <p className="text-[#9a9aad] text-sm mb-6 leading-relaxed">
-            لقد تم إرسال طلب الحساب بنجاح. النادل في طريقه إليك الآن بالفاتورة لاستكمال الدفع. شكرًا لزيارتك!
-          </p>
-          <div className="w-full bg-[#0a0a0f] rounded-2xl p-4 border border-white/5 space-y-2 mb-6">
-            <div className="text-xs text-[#5e5e72] font-medium flex justify-between">
-              <span>رقم الطاولة</span>
-              <span className="font-bold text-white">{tableNumber}</span>
-            </div>
-            <div className="text-xs text-[#5e5e72] font-medium flex justify-between">
-              <span>حالة الطلب</span>
-              <span className="text-yellow-400 font-bold">انتظار الحساب</span>
-            </div>
+          <div className="w-20 h-20 flex items-center justify-center mx-auto mb-6 relative">
+            <div className="absolute inset-0 border-4 border-white/10 rounded-full"></div>
+            <div className="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-2xl">⏳</span>
           </div>
-          <p className="text-xs text-[#5e5e72] animate-pulse">ننتظر تأكيد النادل لإنهاء الجلسة...</p>
+          <h2 className="text-2xl font-black mb-3">جاري تأكيد الدفع...</h2>
+          <p className="text-[#9a9aad] text-sm mb-4 leading-relaxed">
+            يرجى الانتظار قليلاً حتى يتم تأكيد الدفع من قبل الإدارة.
+          </p>
+          <div className="bg-[#0a0a0f] border border-white/5 rounded-xl p-3 text-xs text-primary/80 animate-pulse">
+            سيتم تحديث هذه الصفحة تلقائياً فور التأكيد ✔️
+          </div>
         </div>
       </div>
     );
@@ -905,10 +1012,10 @@ export default function MenuPage() {
         <div className="text-center animate-slide-up relative z-10 max-w-sm w-full">
           {/* Status Icon */}
           <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto mb-8 border-4 shadow-2xl transition-all duration-500 ${isReady
-              ? 'bg-green-500/10 border-green-500 text-green-400 shadow-green-500/30 scale-110'
-              : isPreparing
-                ? 'bg-primary/10 border-primary text-primary shadow-primary/30 scale-100'
-                : 'bg-white/5 border-white/10 text-[#9a9aad] scale-95'
+            ? 'bg-green-500/10 border-green-500 text-green-400 shadow-green-500/30 scale-110'
+            : isPreparing
+              ? 'bg-primary/10 border-primary text-primary shadow-primary/30 scale-100'
+              : 'bg-white/5 border-white/10 text-[#9a9aad] scale-95'
             }`}>
             {isReady ? <FaCheckCircle size={64} /> : isPreparing ? <FaFire size={64} className="animate-pulse" /> : <FaClock size={64} className="animate-pulse" />}
           </div>
@@ -939,16 +1046,15 @@ export default function MenuPage() {
 
           <div className="space-y-3 w-full mt-4" dir="rtl">
 
-            {/* ─── 1. نبه المطبخ (يظهر لما الأوردر في الطريق) ─── */}
-            {!isReady && (
+            {/* ─── 1. نبه المطبخ (يظهر لما الأوردر يتأخر ويخلص الوقت) ─── */}
+            {(isPreparing && isTimeOver) && (
               <button
                 onClick={handleAlertKitchen}
                 disabled={kitchenAlertSent}
-                className={`w-full py-4 rounded-2xl font-bold text-base transition-all border flex items-center justify-center gap-2 ${
-                  kitchenAlertSent
-                    ? 'bg-yellow-500/5 border-yellow-500/20 text-yellow-500/50 cursor-not-allowed'
-                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 active:scale-95'
-                }`}
+                className={`w-full py-4 rounded-2xl font-bold text-base transition-all border flex items-center justify-center gap-2 ${kitchenAlertSent
+                  ? 'bg-yellow-500/5 border-yellow-500/20 text-yellow-500/50 cursor-not-allowed'
+                  : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 active:scale-95'
+                  }`}
               >
                 🔔 {kitchenAlertSent ? `تم التنبيه (انتظر ${kitchenAlertTimer} ث)` : 'الأوردر اتأخر؟ بلغ المطبخ!'}
               </button>
@@ -962,9 +1068,9 @@ export default function MenuPage() {
               <FaPlus size={14} /> طلب المزيد من المنيو
             </button>
 
-            {/* ─── 3 & 4. Dine-in actions ─── */}
-            {(isReady && orderType === 'dine-in') && (
-              <div className="grid grid-cols-2 gap-3">
+            {/* ─── 3 & 4. Dine-in / Takeaway / Delivery actions ─── */}
+            {(orderType === 'dine-in' || orderType === 'takeaway' || orderType === 'delivery') && (
+              <div className="grid grid-cols-2 gap-3 mt-4">
                 {/* قولي رياك */}
                 <button
                   onClick={() => { setFeedbackMode('review'); setShowFeedbackModal(true); }}
@@ -976,7 +1082,7 @@ export default function MenuPage() {
 
                 {/* إنهاء الجلسة والحساب */}
                 <button
-                  onClick={() => { setFeedbackMode('billing'); setShowFeedbackModal(true); }}
+                  onClick={handleRequestBill}
                   className="py-4 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 font-bold rounded-2xl text-sm transition-all flex flex-col items-center justify-center gap-1 active:scale-95"
                 >
                   <span className="text-2xl">🧾</span>
@@ -1003,7 +1109,7 @@ export default function MenuPage() {
             <div className="bg-[#13131f] border border-white/10 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-slide-up text-center">
               <h2 className="text-2xl font-black text-primary mb-2">قولي رياك! 😍</h2>
               <p className="text-[#9a9aad] text-xs mb-6">يسعدنا معرفة رأيك لتقديم أفضل تجربة لك دائماً</p>
-              
+
               <form onSubmit={handleSubmitFeedback} className="space-y-5">
                 {/* Emoticon Rating */}
                 <div>
@@ -1020,11 +1126,10 @@ export default function MenuPage() {
                         type="button"
                         key={opt.val}
                         onClick={() => setFeedbackRating(opt.val)}
-                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
-                          feedbackRating === opt.val
-                            ? 'bg-primary/20 scale-110 border border-primary/30'
-                            : 'opacity-50 hover:opacity-100'
-                        }`}
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${feedbackRating === opt.val
+                          ? 'bg-primary/20 scale-110 border border-primary/30'
+                          : 'opacity-50 hover:opacity-100'
+                          }`}
                       >
                         <span className="text-3xl">{opt.emo}</span>
                         <span className="text-[10px] font-bold text-[#9a9aad]">{opt.label}</span>
@@ -1048,9 +1153,8 @@ export default function MenuPage() {
                             type="button"
                             key={star}
                             onClick={() => sub.set(star)}
-                            className={`text-xs transition-colors ${
-                              star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
-                            }`}
+                            className={`text-xs transition-colors ${star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
+                              }`}
                           >
                             ★
                           </button>
@@ -1105,6 +1209,157 @@ export default function MenuPage() {
           </div>
         )}
 
+        {/* ─── Invoice / Payment Modal ─── */}
+        {showInvoiceModal && invoiceData && (
+          <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/80 backdrop-blur-md p-0" dir="rtl">
+            <div className="bg-[#0d0d1a] border-t border-white/10 rounded-t-3xl w-full max-w-lg shadow-2xl animate-slide-up overflow-y-auto max-h-[92vh]">
+
+              {/* Header */}
+              <div className="relative px-6 pt-6 pb-4 text-center border-b border-white/5">
+                <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-4" />
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/20 border border-primary/30 flex items-center justify-center mx-auto mb-3 shadow-[0_0_30px_rgba(200,149,108,0.3)]">
+                  <span className="text-3xl">🧾</span>
+                </div>
+                <h2 className="text-xl font-black text-white">فاتورتك جاهزة</h2>
+                <p className="text-[#9a9aad] text-xs mt-1">اختار طريقة الدفع وأنهي الجلسة</p>
+              </div>
+
+              <div className="px-6 py-5 space-y-5">
+
+                {/* Order Reference */}
+                <div className="bg-[#13131f] border border-primary/20 rounded-2xl p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-[#9a9aad] text-xs mb-0.5">رقم الطلب</p>
+                    <p className="text-primary font-black text-lg tracking-widest" dir="ltr">{invoiceData.orderReference || 'IG-XXXXXX'}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[#9a9aad] text-xs mb-0.5">طاولة</p>
+                    <p className="text-white font-bold text-lg">{invoiceData.tableNumber}</p>
+                  </div>
+                </div>
+
+                {/* Bill Items */}
+                {invoiceData.items?.length > 0 && (
+                  <div className="bg-[#13131f] border border-white/5 rounded-2xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-white/5">
+                      <p className="text-white font-bold text-sm">تفاصيل الطلب</p>
+                    </div>
+                    <div className="divide-y divide-white/5">
+                      {invoiceData.items.map((item, i) => (
+                        <div key={i} className="px-4 py-3 flex justify-between items-center">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 bg-primary/10 border border-primary/20 rounded-lg text-xs font-bold text-primary flex items-center justify-center">{item.quantity}</span>
+                            <span className="text-white text-sm">{item.name}</span>
+                          </div>
+                          <span className="text-[#9a9aad] text-sm font-bold">{item.total?.toFixed(2)} جنيه</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="px-4 py-3 border-t border-white/5 space-y-1.5">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-[#9a9aad]">المجموع</span>
+                        <span className="text-white">{invoiceData.subtotal?.toFixed(2)} جنيه</span>
+                      </div>
+                      {invoiceData.taxAmount > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-[#9a9aad]">ضريبة ({((invoiceData.taxRate || 0) * 100).toFixed(0)}%)</span>
+                          <span className="text-white">{invoiceData.taxAmount?.toFixed(2)} جنيه</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-black text-base pt-1 border-t border-white/10">
+                        <span className="text-white">الإجمالي</span>
+                        <span className="text-primary text-lg">{invoiceData.total?.toFixed(2)} جنيه</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment Method */}
+                <div>
+                  <p className="text-white font-bold text-sm mb-3">طريقة الدفع</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setPaymentMethod('instagram')}
+                      className={`relative p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'instagram' ? 'border-pink-500 bg-gradient-to-b from-pink-500/20 to-purple-600/10 shadow-[0_0_20px_rgba(236,72,153,0.25)]' : 'border-white/10 bg-[#13131f] hover:border-white/20'}`}
+                    >
+                      {paymentMethod === 'instagram' && (
+                        <span className="absolute top-2 left-2 w-5 h-5 bg-pink-500 rounded-full flex items-center justify-center text-white text-xs">✓</span>
+                      )}
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center text-xl shadow-lg">📱</div>
+                      <p className="font-bold text-[13px] text-white">إنستا باي / فودافون كاش</p>
+                      <p className="text-[#9a9aad] font-bold text-xs" dir="ltr">01012345678</p>
+                    </button>
+
+                    <button
+                      onClick={() => setPaymentMethod('cash')}
+                      className={`relative p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'cash' ? 'border-green-500 bg-gradient-to-b from-green-500/20 to-emerald-600/10 shadow-[0_0_20px_rgba(34,197,94,0.25)]' : 'border-white/10 bg-[#13131f] hover:border-white/20'}`}
+                    >
+                      {paymentMethod === 'cash' && (
+                        <span className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center text-white text-xs">✓</span>
+                      )}
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-xl shadow-lg">💵</div>
+                      <p className="font-bold text-sm text-white">كاش</p>
+                      <p className="text-[#9a9aad] text-[10px]">عند الكاشير</p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Receipt Upload */}
+                <div>
+                  <p className="text-white font-bold text-sm mb-3">صورة الإيصال <span className="text-[#5e5e72] font-normal text-xs">(اختياري)</span></p>
+                  {receiptPreview ? (
+                    <div className="relative rounded-2xl overflow-hidden border border-white/10">
+                      <img src={receiptPreview} alt="إيصال" className="w-full h-40 object-cover" />
+                      <button
+                        onClick={() => { setReceiptFile(null); setReceiptPreview(null); }}
+                        className="absolute top-2 right-2 w-8 h-8 bg-black/70 rounded-full flex items-center justify-center text-white text-sm hover:bg-red-500/80 transition-colors"
+                      >✕</button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center gap-2 p-5 border-2 border-dashed border-white/15 rounded-2xl hover:border-primary/40 hover:bg-primary/5 transition-all cursor-pointer">
+                      <span className="text-3xl">📷</span>
+                      <p className="text-[#9a9aad] text-xs text-center">ارفع صورة الإيصال<br /><span className="text-primary">اضغط هنا</span></p>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setReceiptFile(file);
+                            setReceiptPreview(URL.createObjectURL(file));
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 pb-2">
+                  <button
+                    onClick={() => setShowInvoiceModal(false)}
+                    className="flex-1 py-4 rounded-2xl border border-white/10 text-[#9a9aad] hover:bg-white/5 transition-colors font-bold text-sm"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    onClick={handleConfirmPayment}
+                    disabled={invoiceSubmitting}
+                    className="flex-[2] py-4 rounded-2xl bg-gradient-to-r from-primary to-accent text-gray-900 font-black text-sm hover:opacity-90 transition-all shadow-[0_4px_20px_rgba(200,149,108,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {invoiceSubmitting
+                      ? <><span className="animate-spin">⏳</span> جاري الإنهاء...</>
+                      : <>✅ OK — إنهاء الطلب</>
+                    }
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     );
   }
@@ -1139,8 +1394,8 @@ export default function MenuPage() {
               <span className="text-primary font-bold text-sm">طاولة رقم {tableNumber}</span>
             </div>
             {activeSession && (
-              <button 
-                onClick={() => setShowFeedbackModal(true)}
+              <button
+                onClick={handleRequestBill}
                 className="mt-1 text-xs text-red-400 font-bold border border-red-500/20 hover:bg-red-500/10 px-3 py-1 rounded-full flex items-center gap-1 transition-all"
               >
                 🧾 طلب الحساب وإنهاء الجلسة
@@ -1157,8 +1412,8 @@ export default function MenuPage() {
             key={cat._id}
             onClick={() => setActiveCategory(cat._id)}
             className={`px-5 py-2 flex items-center gap-2 rounded-full border text-sm font-bold whitespace-nowrap transition-all flex-shrink-0 ${activeCategory === cat._id
-                ? 'bg-primary border-primary text-gray-900 shadow-[0_0_15px_rgba(200,149,108,0.4)]'
-                : 'bg-[#13131f] border-white/10 text-[#9a9aad] hover:border-primary/50'
+              ? 'bg-primary border-primary text-gray-900 shadow-[0_0_15px_rgba(200,149,108,0.4)]'
+              : 'bg-[#13131f] border-white/10 text-[#9a9aad] hover:border-primary/50'
               }`}
           >
             {cat.icon && <span>{cat.icon}</span>}
@@ -1270,7 +1525,7 @@ export default function MenuPage() {
               {getCartCount()}
             </span>
           </div>
-          <span>عرض الطلب</span>
+          <span> إرسال للمطبخ </span>
           <span className="bg-gray-900/30 rounded-lg px-2 py-0.5 text-sm">${getCartTotal().toFixed(2)}</span>
         </button>
       )}
@@ -1374,7 +1629,7 @@ export default function MenuPage() {
           <div className="bg-[#13131f] border border-white/10 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-slide-up text-center">
             <h2 className="text-2xl font-black text-primary mb-2">قولي رياك! 😍</h2>
             <p className="text-[#9a9aad] text-xs mb-6">يسعدنا معرفة رأيك لتقديم أفضل تجربة لك دائماً</p>
-            
+
             <form onSubmit={handleSubmitFeedback} className="space-y-5">
               {/* Emoticon Rating */}
               <div>
@@ -1391,11 +1646,10 @@ export default function MenuPage() {
                       type="button"
                       key={opt.val}
                       onClick={() => setFeedbackRating(opt.val)}
-                      className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
-                        feedbackRating === opt.val
-                          ? 'bg-primary/20 scale-110 border border-primary/30'
-                          : 'opacity-50 hover:opacity-100'
-                      }`}
+                      className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${feedbackRating === opt.val
+                        ? 'bg-primary/20 scale-110 border border-primary/30'
+                        : 'opacity-50 hover:opacity-100'
+                        }`}
                     >
                       <span className="text-3xl">{opt.emo}</span>
                       <span className="text-[10px] font-bold text-[#9a9aad]">{opt.label}</span>
@@ -1419,9 +1673,8 @@ export default function MenuPage() {
                           type="button"
                           key={star}
                           onClick={() => sub.set(star)}
-                          className={`text-xs transition-colors ${
-                            star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
-                          }`}
+                          className={`text-xs transition-colors ${star <= sub.val ? 'text-yellow-400' : 'text-gray-600'
+                            }`}
                         >
                           ★
                         </button>
@@ -1472,6 +1725,157 @@ export default function MenuPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Invoice / Payment Modal ─── */}
+      {showInvoiceModal && invoiceData && (
+        <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/80 backdrop-blur-md p-0" dir="rtl">
+          <div className="bg-[#0d0d1a] border-t border-white/10 rounded-t-3xl w-full max-w-lg shadow-2xl animate-slide-up overflow-y-auto max-h-[92vh]">
+
+            {/* Header */}
+            <div className="relative px-6 pt-6 pb-4 text-center border-b border-white/5">
+              <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-4" />
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/20 border border-primary/30 flex items-center justify-center mx-auto mb-3 shadow-[0_0_30px_rgba(200,149,108,0.3)]">
+                <span className="text-3xl">🧾</span>
+              </div>
+              <h2 className="text-xl font-black text-white">فاتورتك جاهزة</h2>
+              <p className="text-[#9a9aad] text-xs mt-1">اختار طريقة الدفع وأنهي الجلسة</p>
+            </div>
+
+            <div className="px-6 py-5 space-y-5">
+
+              {/* Order Reference */}
+              <div className="bg-[#13131f] border border-primary/20 rounded-2xl p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-[#9a9aad] text-xs mb-0.5">رقم الطلب</p>
+                  <p className="text-primary font-black text-lg tracking-widest" dir="ltr">{invoiceData.orderReference || 'IG-XXXXXX'}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[#9a9aad] text-xs mb-0.5">طاولة</p>
+                  <p className="text-white font-bold text-lg">{invoiceData.tableNumber}</p>
+                </div>
+              </div>
+
+              {/* Bill Items */}
+              {invoiceData.items?.length > 0 && (
+                <div className="bg-[#13131f] border border-white/5 rounded-2xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-white/5">
+                    <p className="text-white font-bold text-sm">تفاصيل الطلب</p>
+                  </div>
+                  <div className="divide-y divide-white/5">
+                    {invoiceData.items.map((item, i) => (
+                      <div key={i} className="px-4 py-3 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 bg-primary/10 border border-primary/20 rounded-lg text-xs font-bold text-primary flex items-center justify-center">{item.quantity}</span>
+                          <span className="text-white text-sm">{item.name}</span>
+                        </div>
+                        <span className="text-[#9a9aad] text-sm font-bold">{item.total?.toFixed(2)} جنيه</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-4 py-3 border-t border-white/5 space-y-1.5">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#9a9aad]">المجموع</span>
+                      <span className="text-white">{invoiceData.subtotal?.toFixed(2)} جنيه</span>
+                    </div>
+                    {invoiceData.taxAmount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-[#9a9aad]">ضريبة ({((invoiceData.taxRate || 0) * 100).toFixed(0)}%)</span>
+                        <span className="text-white">{invoiceData.taxAmount?.toFixed(2)} جنيه</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-black text-base pt-1 border-t border-white/10">
+                      <span className="text-white">الإجمالي</span>
+                      <span className="text-primary text-lg">{invoiceData.total?.toFixed(2)} جنيه</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Payment Method */}
+              <div>
+                <p className="text-white font-bold text-sm mb-3">طريقة الدفع</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setPaymentMethod('instagram')}
+                    className={`relative p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'instagram' ? 'border-pink-500 bg-gradient-to-b from-pink-500/20 to-purple-600/10 shadow-[0_0_20px_rgba(236,72,153,0.25)]' : 'border-white/10 bg-[#13131f] hover:border-white/20'}`}
+                  >
+                    {paymentMethod === 'instagram' && (
+                      <span className="absolute top-2 left-2 w-5 h-5 bg-pink-500 rounded-full flex items-center justify-center text-white text-xs">✓</span>
+                    )}
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center text-xl shadow-lg">📱</div>
+                    <p className="font-bold text-[13px] text-white">إنستا باي / فودافون كاش</p>
+                    <p className="text-[#9a9aad] text-[10px]">InstaPay / V-Cash</p>
+                  </button>
+
+                  <button
+                    onClick={() => setPaymentMethod('cash')}
+                    className={`relative p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'cash' ? 'border-green-500 bg-gradient-to-b from-green-500/20 to-emerald-600/10 shadow-[0_0_20px_rgba(34,197,94,0.25)]' : 'border-white/10 bg-[#13131f] hover:border-white/20'}`}
+                  >
+                    {paymentMethod === 'cash' && (
+                      <span className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center text-white text-xs">✓</span>
+                    )}
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-xl shadow-lg">💵</div>
+                    <p className="font-bold text-sm text-white">كاش</p>
+                    <p className="text-[#9a9aad] text-[10px]">عند الكاشير</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Receipt Upload */}
+              <div>
+                <p className="text-white font-bold text-sm mb-3">صورة الإيصال <span className="text-[#5e5e72] font-normal text-xs">(اختياري)</span></p>
+                {receiptPreview ? (
+                  <div className="relative rounded-2xl overflow-hidden border border-white/10">
+                    <img src={receiptPreview} alt="إيصال" className="w-full h-40 object-cover" />
+                    <button
+                      onClick={() => { setReceiptFile(null); setReceiptPreview(null); }}
+                      className="absolute top-2 right-2 w-8 h-8 bg-black/70 rounded-full flex items-center justify-center text-white text-sm hover:bg-red-500/80 transition-colors"
+                    >✕</button>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center justify-center gap-2 p-5 border-2 border-dashed border-white/15 rounded-2xl hover:border-primary/40 hover:bg-primary/5 transition-all cursor-pointer">
+                    <span className="text-3xl">📷</span>
+                    <p className="text-[#9a9aad] text-xs text-center">ارفع صورة الإيصال<br /><span className="text-primary">اضغط هنا</span></p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setReceiptFile(file);
+                          setReceiptPreview(URL.createObjectURL(file));
+                        }
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3 pb-2">
+                <button
+                  onClick={() => setShowInvoiceModal(false)}
+                  className="flex-1 py-4 rounded-2xl border border-white/10 text-[#9a9aad] hover:bg-white/5 transition-colors font-bold text-sm"
+                >
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleConfirmPayment}
+                  disabled={invoiceSubmitting}
+                  className="flex-[2] py-4 rounded-2xl bg-gradient-to-r from-primary to-accent text-gray-900 font-black text-sm hover:opacity-90 transition-all shadow-[0_4px_20px_rgba(200,149,108,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {invoiceSubmitting
+                    ? <><span className="animate-spin">⏳</span> جاري الإنهاء...</>
+                    : <>✅ OK — إنهاء الطلب</>
+                  }
+                </button>
+              </div>
+
+            </div>
           </div>
         </div>
       )}
