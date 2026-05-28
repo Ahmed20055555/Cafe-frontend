@@ -1069,7 +1069,7 @@ export default function MenuPage() {
             </button>
 
             {/* ─── 3 & 4. Dine-in / Takeaway / Delivery actions ─── */}
-            {(orderType === 'dine-in' || orderType === 'takeaway' || orderType === 'delivery') && (
+            {(orderType === 'dine-in' || orderType === 'takeaway' || orderType === 'delivery') && isReady && (
               <div className="grid grid-cols-2 gap-3 mt-4">
                 {/* قولي رياك */}
                 <button
