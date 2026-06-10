@@ -13,14 +13,15 @@ function AlertBanner({ alerts, onDismiss }) {
       {alerts.map((a) => (
         <div
           key={a.id}
-          className={`flex items-center justify-between gap-4 px-5 py-4 rounded-2xl shadow-2xl pointer-events-auto animate-slide-up border ${
+          className={`flex items-center justify-between gap-4 px-5 py-4 rounded-2xl shadow-2xl pointer-events-auto border ${
             a.type === 'ready'
               ? 'bg-green-500 border-green-400 text-gray-900'
               : 'bg-primary border-primary/80 text-gray-900'
           }`}
+          style={{ animation: 'slideDown 0.3s ease' }}
         >
           <div className="flex items-center gap-3">
-            <FaBell className="text-2xl animate-bounce" />
+            <FaBell className="text-2xl animate-bounce flex-shrink-0" />
             <div>
               <p className="font-black text-lg leading-tight">{a.title}</p>
               <p className="text-sm font-medium opacity-80">{a.body}</p>
@@ -28,7 +29,7 @@ function AlertBanner({ alerts, onDismiss }) {
           </div>
           <button
             onClick={() => onDismiss(a.id)}
-            className="bg-black/20 hover:bg-black/40 rounded-xl px-3 py-1.5 text-sm font-bold transition-colors"
+            className="bg-black/20 hover:bg-black/40 rounded-xl px-3 py-1.5 text-sm font-bold transition-colors flex-shrink-0"
           >
             إغلاق
           </button>
@@ -39,7 +40,10 @@ function AlertBanner({ alerts, onDismiss }) {
 }
 
 export default function WaiterDashboard() {
-  const [orders, setOrders] = useState([]);
+  // Separate states: activeOrders (pending/preparing) fetched from API
+  // readyOrders: fed via socket events in real-time
+  const [activeOrders, setActiveOrders] = useState([]);
+  const [readyOrders, setReadyOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [alerts, setAlerts] = useState([]);
@@ -48,11 +52,9 @@ export default function WaiterDashboard() {
   const addAlert = useCallback((type, title, body) => {
     const id = ++alertIdRef.current;
     setAlerts(prev => [...prev, { id, type, title, body }]);
-    // Auto dismiss after 8 seconds
     setTimeout(() => {
       setAlerts(prev => prev.filter(a => a.id !== id));
     }, 8000);
-    // Play sound
     try { new Audio('/notification.mp3').play(); } catch (_) {}
   }, []);
 
@@ -63,9 +65,15 @@ export default function WaiterDashboard() {
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get('/orders/active');
-      if (res.data.success) {
-        setOrders(res.data.data);
+      // Fetch active (pending/preparing) orders
+      const activeRes = await api.get('/orders/active');
+      if (activeRes.data.success) {
+        setActiveOrders(activeRes.data.data);
+      }
+      // Fetch ready orders separately
+      const readyRes = await api.get('/orders?status=ready');
+      if (readyRes.data.success) {
+        setReadyOrders(readyRes.data.data);
       }
     } catch (e) {
       toast.error('حدث خطأ أثناء جلب الطلبات');
@@ -86,35 +94,34 @@ export default function WaiterDashboard() {
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => setConnected(false));
 
-    // New order came in
+    // New order came in → add to activeOrders
     socket.on('order:new', (o) => {
-      setOrders(prev => prev.find(x => x._id === o._id) ? prev : [o, ...prev]);
-      addAlert(
-        'new',
-        `🆕 أوردر جديد!`,
-        `طاولة ${o.tableNumber && o.tableNumber > 0 ? o.tableNumber : 'سفري'} — ${o.items?.length || ''} صنف`
-      );
+      setActiveOrders(prev => prev.find(x => x._id === o._id) ? prev : [o, ...prev]);
+      addAlert('new', `🆕 أوردر جديد!`, `طاولة ${o.tableNumber && o.tableNumber > 0 ? o.tableNumber : 'سفري'} — ${o.items?.length || ''} صنف`);
     });
 
-    // Order status changed
+    // Status update → move between lists accordingly
     socket.on('order:statusUpdate', (updated) => {
-      setOrders(prev => {
-        if (['completed', 'cancelled'].includes(updated.status)) {
-          return prev.filter(o => o._id !== updated._id);
-        }
-        // If served already, remove from active
-        if (updated.status === 'served') {
-          return prev.filter(o => o._id !== updated._id);
-        }
-        return prev.map(o => o._id === updated._id ? updated : o);
-      });
-
       if (updated.status === 'ready') {
-        addAlert(
-          'ready',
-          `✅ أوردر جاهز للتقديم!`,
-          `طاولة ${updated.tableNumber && updated.tableNumber > 0 ? updated.tableNumber : 'سفري'} — خلصه المطبخ!`
+        // Remove from active, add to ready
+        setActiveOrders(prev => prev.filter(o => o._id !== updated._id));
+        setReadyOrders(prev => prev.find(x => x._id === updated._id) ? prev : [updated, ...prev]);
+        addAlert('ready', `✅ أوردر جاهز للتقديم!`, `طاولة ${updated.tableNumber && updated.tableNumber > 0 ? updated.tableNumber : 'سفري'} — خلصه المطبخ!`);
+
+      } else if (['completed', 'cancelled', 'served'].includes(updated.status)) {
+        // Remove from both lists
+        setActiveOrders(prev => prev.filter(o => o._id !== updated._id));
+        setReadyOrders(prev => prev.filter(o => o._id !== updated._id));
+
+      } else {
+        // pending / preparing → update in activeOrders
+        setActiveOrders(prev =>
+          prev.find(x => x._id === updated._id)
+            ? prev.map(o => o._id === updated._id ? updated : o)
+            : [updated, ...prev]
         );
+        // Also remove from readyOrders if it was there somehow
+        setReadyOrders(prev => prev.filter(o => o._id !== updated._id));
       }
     });
 
@@ -130,7 +137,7 @@ export default function WaiterDashboard() {
 
   const markServed = async (id) => {
     try {
-      setOrders(prev => prev.filter(o => o._id !== id));
+      setReadyOrders(prev => prev.filter(o => o._id !== id));
       await api.patch(`/orders/${id}/status`, { status: 'served' });
       toast.success('تم تقديم الطلب بنجاح ✓');
     } catch (err) {
@@ -139,12 +146,8 @@ export default function WaiterDashboard() {
     }
   };
 
-  const readyOrders = orders.filter(o => o.status === 'ready');
-  const activeOrders = orders.filter(o => ['pending', 'preparing'].includes(o.status));
-
   return (
     <>
-      {/* Full-screen Alert Banners */}
       <AlertBanner alerts={alerts} onDismiss={dismissAlert} />
 
       <div className="space-y-8">
@@ -168,13 +171,13 @@ export default function WaiterDashboard() {
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border ${
               connected ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30'
             }`}>
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}/>
-              {connected ? 'مباشر 🔴' : 'غير متصل'}
+              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+              {connected ? 'مباشر' : 'غير متصل'}
             </div>
           </div>
         </div>
 
-        {/* Ready Orders Section */}
+        {/* Ready Orders */}
         <div>
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <span className="w-8 h-8 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center">
@@ -195,7 +198,7 @@ export default function WaiterDashboard() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {readyOrders.map(order => (
-                <div key={order._id} className="bg-gradient-to-br from-green-500/10 to-[#111118] border-2 border-green-500/40 rounded-2xl p-5 shadow-[0_4px_20px_rgba(34,197,94,0.2)] animate-slide-up">
+                <div key={order._id} className="bg-gradient-to-br from-green-500/10 to-[#111118] border-2 border-green-500/40 rounded-2xl p-5 shadow-[0_4px_20px_rgba(34,197,94,0.2)]">
                   <div className="flex justify-between items-start mb-4">
                     <div>
                       <h3 className="text-xl font-black text-white">
@@ -203,9 +206,7 @@ export default function WaiterDashboard() {
                       </h3>
                       <p className="text-xs text-green-400 mt-1 font-bold animate-pulse">● جاهز للتقديم الآن!</p>
                     </div>
-                    <div className="text-left font-mono text-sm text-[#9a9aad]">
-                      #{order.orderNumber || order._id.slice(-4)}
-                    </div>
+                    <span className="font-mono text-sm text-[#9a9aad]">#{order.orderNumber || order._id.slice(-4)}</span>
                   </div>
 
                   <div className="space-y-2 mb-6">
@@ -229,7 +230,7 @@ export default function WaiterDashboard() {
           )}
         </div>
 
-        {/* Active Orders Section */}
+        {/* Active Orders */}
         <div>
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <span className="w-8 h-8 rounded-full bg-yellow-500/20 text-yellow-400 flex items-center justify-center">
@@ -252,18 +253,13 @@ export default function WaiterDashboard() {
                         {order.tableNumber && order.tableNumber > 0 ? `🪑 طاولة ${order.tableNumber}` : '🛍️ سفري'}
                       </h3>
                       <span className={`inline-block mt-1 px-2 py-0.5 rounded-md text-xs font-bold ${
-                        order.status === 'preparing'
-                          ? 'bg-blue-500/10 text-blue-400'
-                          : 'bg-yellow-500/10 text-yellow-400'
+                        order.status === 'preparing' ? 'bg-blue-500/10 text-blue-400' : 'bg-yellow-500/10 text-yellow-400'
                       }`}>
                         {order.status === 'preparing' ? '🔥 في المطبخ' : '⏳ بانتظار المطبخ'}
                       </span>
                     </div>
-                    <div className="text-left font-mono text-sm text-[#9a9aad]">
-                      #{order.orderNumber || order._id.slice(-4)}
-                    </div>
+                    <span className="font-mono text-sm text-[#9a9aad]">#{order.orderNumber || order._id.slice(-4)}</span>
                   </div>
-
                   <div className="space-y-2">
                     {order.items.map((item, idx) => (
                       <div key={idx} className="flex gap-2 text-sm">
@@ -278,6 +274,13 @@ export default function WaiterDashboard() {
           )}
         </div>
       </div>
+
+      <style>{`
+        @keyframes slideDown {
+          from { transform: translateY(-100%); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
     </>
   );
 }
