@@ -3,13 +3,13 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../lib/api';
 
 const SettingsContext = createContext({
-  settings: { cafeName: 'كافيه أرتيزان', primaryColor: '#c8956c' },
+  settings: { cafeName: '... ', primaryColor: '#c8956c' },
   updateSettings: async () => {},
   loading: true
 });
 
 export function SettingsProvider({ children }) {
-  const [settings, setSettings] = useState({ cafeName: 'كافيه أرتيزان', primaryColor: '#c8956c' });
+  const [settings, setSettings] = useState({ cafeName: '...', primaryColor: '#c8956c' });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

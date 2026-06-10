@@ -97,7 +97,6 @@ export default function PaymentsConfirmation() {
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <h3 className="text-lg font-bold text-white">طاولة رقم {bill.tableNumber}</h3>
-                    <p className="text-xs text-[#9a9aad]" dir="ltr">{bill.orderReference}</p>
                   </div>
                   <div className="text-left">
                     <span className="text-primary font-black text-xl">{bill.total.toFixed(2)} EGP</span>

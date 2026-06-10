@@ -984,7 +984,7 @@ export default function MenuPage() {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-[100px] opacity-15 bg-green-500 pointer-events-none" />
         <div className="animate-slide-up relative z-10 max-w-sm w-full bg-[#13131f] border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl">
           <div className="w-20 h-20 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center text-4xl mx-auto mb-6">👋</div>
-          <h2 className="text-2xl font-black mb-3">بالهناء والشفاء!</h2>
+          <h2 className="text-2xl font-black mb-3">بالهنا والشفا</h2>
           <p className="text-[#9a9aad] text-sm mb-8 leading-relaxed">
             تم دفع الحساب وإغلاق الجلسة بنجاح. نتمنى أن تكون تجربتك في كافيه أرتيزان مميزة، ونسعد برؤيتك مرة أخرى قريباً!
           </p>
@@ -1000,6 +1000,7 @@ export default function MenuPage() {
   }
 
   if (orderSuccess) {
+
     const isPreparing = orderTracker?.status === 'preparing';
     const isReady = orderTracker?.status === 'ready';
 
@@ -1010,6 +1011,7 @@ export default function MenuPage() {
           }`} />
 
         <div className="text-center animate-slide-up relative z-10 max-w-sm w-full">
+
           {/* Status Icon */}
           <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto mb-8 border-4 shadow-2xl transition-all duration-500 ${isReady
             ? 'bg-green-500/10 border-green-500 text-green-400 shadow-green-500/30 scale-110'
@@ -1077,7 +1079,7 @@ export default function MenuPage() {
                   className="py-4 bg-purple-500/10 border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 font-bold rounded-2xl text-sm transition-all flex flex-col items-center justify-center gap-1 active:scale-95"
                 >
                   <span className="text-2xl">😍</span>
-                  قولي رياك
+                   
                 </button>
 
                 {/* إنهاء الجلسة والحساب */}
@@ -1091,14 +1093,6 @@ export default function MenuPage() {
               </div>
             )}
 
-            {!isReady && (
-              <button
-                onClick={() => setOrderSuccess(false)}
-                className="w-full py-3 bg-[#13131f] border border-white/10 text-[#9a9aad] font-medium rounded-2xl hover:bg-white/5 transition-all text-sm"
-              >
-                تصفح المنيو فقط
-              </button>
-            )}
           </div>
 
         </div>
