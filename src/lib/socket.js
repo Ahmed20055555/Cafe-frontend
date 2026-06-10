@@ -10,8 +10,9 @@ export const getSocket = () => {
     socket = io(SOCKET_URL, {
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
   }
   return socket;
@@ -24,6 +25,7 @@ export const connectSocket = () => {
 };
 
 export const disconnectSocket = () => {
+  // Don't fully destroy - just disconnect so we can reconnect later
   if (socket && socket.connected) {
     socket.disconnect();
   }
