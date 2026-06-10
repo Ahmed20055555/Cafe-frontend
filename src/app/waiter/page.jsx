@@ -62,18 +62,26 @@ export default function WaiterDashboard() {
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
+  // Only show dine-in (table) orders — exclude takeaway & delivery
+  const isDineIn = (order) => {
+    if (!order.tableNumber || order.tableNumber <= 0) return false;
+    if (order.customerNotes?.includes('ديليفري')) return false;
+    if (order.customerNotes?.includes('تيك أوي')) return false;
+    return true;
+  };
+
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch active (pending/preparing) orders
+      // Fetch active (pending/preparing) orders — tables only
       const activeRes = await api.get('/orders/active');
       if (activeRes.data.success) {
-        setActiveOrders(activeRes.data.data);
+        setActiveOrders(activeRes.data.data.filter(isDineIn));
       }
-      // Fetch ready orders separately
+      // Fetch ready orders separately — tables only
       const readyRes = await api.get('/orders?status=ready');
       if (readyRes.data.success) {
-        setReadyOrders(readyRes.data.data);
+        setReadyOrders(readyRes.data.data.filter(isDineIn));
       }
     } catch (e) {
       toast.error('حدث خطأ أثناء جلب الطلبات');
@@ -94,19 +102,26 @@ export default function WaiterDashboard() {
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => setConnected(false));
 
-    // New order came in → add to activeOrders
+    // New order came in → add to activeOrders (tables only)
     socket.on('order:new', (o) => {
+      if (!isDineIn(o)) return; // ignore takeaway & delivery
       setActiveOrders(prev => prev.find(x => x._id === o._id) ? prev : [o, ...prev]);
-      addAlert('new', `🆕 أوردر جديد!`, `طاولة ${o.tableNumber && o.tableNumber > 0 ? o.tableNumber : 'سفري'} — ${o.items?.length || ''} صنف`);
+      addAlert('new', `🆕 أوردر جديد!`, `طاولة ${o.tableNumber} — ${o.items?.length || ''} صنف`);
     });
 
-    // Status update → move between lists accordingly
+    // Status update → move between lists accordingly (tables only)
     socket.on('order:statusUpdate', (updated) => {
+      if (!isDineIn(updated)) {
+        // Non-table order — remove from both lists in case it slipped in
+        setActiveOrders(prev => prev.filter(o => o._id !== updated._id));
+        setReadyOrders(prev => prev.filter(o => o._id !== updated._id));
+        return;
+      }
       if (updated.status === 'ready') {
         // Remove from active, add to ready
         setActiveOrders(prev => prev.filter(o => o._id !== updated._id));
         setReadyOrders(prev => prev.find(x => x._id === updated._id) ? prev : [updated, ...prev]);
-        addAlert('ready', `✅ أوردر جاهز للتقديم!`, `طاولة ${updated.tableNumber && updated.tableNumber > 0 ? updated.tableNumber : 'سفري'} — خلصه المطبخ!`);
+        addAlert('ready', `✅ أوردر جاهز للتقديم!`, `طاولة ${updated.tableNumber} — خلصه المطبخ!`);
 
       } else if (['completed', 'cancelled', 'served'].includes(updated.status)) {
         // Remove from both lists
