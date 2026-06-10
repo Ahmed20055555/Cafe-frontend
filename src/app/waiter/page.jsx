@@ -13,11 +13,10 @@ function AlertBanner({ alerts, onDismiss }) {
       {alerts.map((a) => (
         <div
           key={a.id}
-          className={`flex items-center justify-between gap-4 px-5 py-4 rounded-2xl shadow-2xl pointer-events-auto border ${
-            a.type === 'ready'
+          className={`flex items-center justify-between gap-4 px-5 py-4 rounded-2xl shadow-2xl pointer-events-auto border ${a.type === 'ready'
               ? 'bg-green-500 border-green-400 text-gray-900'
               : 'bg-primary border-primary/80 text-gray-900'
-          }`}
+            }`}
           style={{ animation: 'slideDown 0.3s ease' }}
         >
           <div className="flex items-center gap-3">
@@ -55,7 +54,7 @@ export default function WaiterDashboard() {
     setTimeout(() => {
       setAlerts(prev => prev.filter(a => a.id !== id));
     }, 8000);
-    try { new Audio('/notification.mp3').play(); } catch (_) {}
+    try { new Audio('/notification.mp3').play(); } catch (_) { }
   }, []);
 
   const dismissAlert = useCallback((id) => {
@@ -183,9 +182,8 @@ export default function WaiterDashboard() {
             <button onClick={fetchOrders} className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm font-medium hover:bg-white/10 transition-colors">
               <FaSync size={12} className={loading ? "animate-spin" : ""} /> تحديث
             </button>
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border ${
-              connected ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30'
-            }`}>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border ${connected ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30'
+              }`}>
               <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
               {connected ? 'مباشر' : 'غير متصل'}
             </div>
@@ -267,9 +265,8 @@ export default function WaiterDashboard() {
                       <h3 className="text-lg font-bold text-white">
                         {order.tableNumber && order.tableNumber > 0 ? `🪑 طاولة ${order.tableNumber}` : '🛍️ سفري'}
                       </h3>
-                      <span className={`inline-block mt-1 px-2 py-0.5 rounded-md text-xs font-bold ${
-                        order.status === 'preparing' ? 'bg-blue-500/10 text-blue-400' : 'bg-yellow-500/10 text-yellow-400'
-                      }`}>
+                      <span className={`inline-block mt-1 px-2 py-0.5 rounded-md text-xs font-bold ${order.status === 'preparing' ? 'bg-blue-500/10 text-blue-400' : 'bg-yellow-500/10 text-yellow-400'
+                        }`}>
                         {order.status === 'preparing' ? '🔥 في المطبخ' : '⏳ بانتظار المطبخ'}
                       </span>
                     </div>

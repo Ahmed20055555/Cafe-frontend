@@ -67,7 +67,7 @@ export default function PaymentsConfirmation() {
           {bills.map(bill => (
             <div key={bill._id} className="bg-[#111118] border border-white/10 rounded-3xl overflow-hidden hover:border-primary/40 transition-all shadow-lg flex flex-col">
               {/* Receipt Image Area */}
-              <div 
+              <div
                 className="h-48 bg-[#0a0a0f] relative group cursor-pointer border-b border-white/10 flex items-center justify-center overflow-hidden"
                 onClick={() => setSelectedImage(bill.receiptUrl)}
               >
@@ -86,7 +86,7 @@ export default function PaymentsConfirmation() {
                     <span className="text-sm">لا توجد صورة</span>
                   </div>
                 )}
-                
+
                 <div className="absolute top-3 right-3 bg-blue-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-md">
                   {bill.paymentMethod === 'card' ? 'إنستا باي / تحويل' : 'أخرى'}
                 </div>
@@ -115,7 +115,7 @@ export default function PaymentsConfirmation() {
                 </div>
 
                 <div className="mt-auto pt-2 border-t border-white/5 flex gap-3">
-                  <button 
+                  <button
                     onClick={() => confirmPayment(bill._id)}
                     disabled={submitting === bill._id}
                     className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold py-3 rounded-xl hover:opacity-90 transition-all flex justify-center items-center gap-2 shadow-[0_4px_15px_rgba(16,185,129,0.3)] disabled:opacity-50"
@@ -136,21 +136,21 @@ export default function PaymentsConfirmation() {
 
       {/* Image Modal */}
       {selectedImage && (
-        <div 
+        <div
           className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setSelectedImage(null)}
         >
-          <button 
+          <button
             className="absolute top-6 right-6 w-12 h-12 bg-white/10 rounded-full flex items-center justify-center text-white hover:bg-red-500 hover:scale-110 transition-all"
             onClick={() => setSelectedImage(null)}
           >
             <FaTimes size={24} />
           </button>
-          
-          <img 
-            src={selectedImage} 
-            alt="Receipt Full" 
-            className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl animate-scale-up" 
+
+          <img
+            src={selectedImage}
+            alt="Receipt Full"
+            className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl animate-scale-up"
             onClick={e => e.stopPropagation()}
           />
         </div>
